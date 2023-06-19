@@ -4,12 +4,13 @@ on:
   push:
     branches:
       - main
+      - k3s-ci
   pull_request:
     branches:
       - main
 
 jobs:
-  docker:
+  docker-image:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -30,3 +31,15 @@ jobs:
           context: .
           push: ${{ github.event_name == 'push' && github.repository == 'DIRACGrid/diracx' && github.ref_name == 'main' }}
           tags: ghcr.io/diracgrid/diracx/server:latest
+
+  k3s:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Setup k3s
+        run: |
+          curl -sfL https://get.k3s.io | sh -
+      - name: Deploy DiracX
+        run: |
+          k3s
