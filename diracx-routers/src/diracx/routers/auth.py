@@ -1128,7 +1128,8 @@ async def get_proxy(
     config: Config,
 ):
     voms_role = config.Registry[user_info.vo].Groups[user_info.dirac_group].VOMSRole
-    user_dns = config.Registry[user_info.vo].Users[user_info.sub].DNs
+    _, sub = user_info.sub.split(":", 1)
+    user_dns = config.Registry[user_info.vo].Users[sub].DNs
 
     lifetime_seconds = 3600
     for user_dn in user_dns:
