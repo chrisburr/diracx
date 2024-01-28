@@ -1162,8 +1162,8 @@ async def get_proxy(
                 user_info.dirac_group,
                 voms_role,
                 lifetime_seconds,
-                vomsdir,
                 vomses,
+                vomsdir,
             )
         except ProxyNotFoundError:
             pass
