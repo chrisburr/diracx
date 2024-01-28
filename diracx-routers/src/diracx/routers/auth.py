@@ -34,6 +34,7 @@ from diracx.core.exceptions import (
     DiracHttpResponse,
     ExpiredFlowError,
     PendingAuthorizationError,
+    ProxyNotFoundError,
 )
 from diracx.core.models import TokenResponse, UserInfo
 from diracx.core.properties import (
@@ -48,6 +49,7 @@ from .dependencies import (
     AuthDB,
     AvailableSecurityProperties,
     Config,
+    ProxyDB,
     add_settings_annotation,
 )
 from .fastapi_classes import DiracxRouter
@@ -1117,3 +1119,31 @@ async def legacy_exchange(
         refresh_token_expire_minutes=expires_minutes,
         legacy_exchange=True,
     )
+
+
+@router.get("/proxy")
+async def get_proxy(
+    proxy_db: ProxyDB,
+    user_info: Annotated[AuthorizedUserInfo, Depends(verify_dirac_access_token)],
+    config: Config,
+):
+    voms_role = config.Registry[user_info.vo].Groups[user_info.dirac_group].VOMSRole
+    user_dns = config.Registry[user_info.vo].Users[user_info.sub].DNs
+
+    lifetime_seconds = 3600
+    for user_dn in user_dns:
+        try:
+            return await proxy_db.get_proxy(
+                user_dn,
+                user_info.vo,
+                user_info.dirac_group,
+                voms_role,
+                lifetime_seconds,
+            )
+        except ProxyNotFoundError:
+            pass
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"No available proxy for {user_info.sub}",
+        )
