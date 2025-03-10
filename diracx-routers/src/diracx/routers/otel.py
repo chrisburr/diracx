@@ -76,12 +76,14 @@ def instrument_otel(app: FastAPI) -> None:
         )
     )
     trace.set_tracer_provider(tracer_provider)
-
+    # http_exporter = httpOTPLMetricExporter()
+    headers = {"tenant_id": "lhcbdiracx-cert"}
     # metric_reader = PeriodicExportingMetricReader(ConsoleMetricExporter(),export_interval_millis=1000)
     metric_reader = PeriodicExportingMetricReader(
         OTLPMetricExporter(
             endpoint=otel_settings.grpc_endpoint,
             insecure=otel_settings.grpc_insecure,
+            headers=headers,
         ),
         export_interval_millis=3000,
     )
