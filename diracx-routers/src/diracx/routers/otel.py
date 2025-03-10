@@ -46,6 +46,8 @@ def instrument_otel(app: FastAPI) -> None:
     Note: this is highly experimental, and OpenTelemetry is a quickly moving target
 
     """
+    headers = {"tenant_id": "lhcbdiracx-cert", "X-Scope-OrgID": "lhcbdiracx-cert"}
+
     otel_settings = OTELSettings()
     if not otel_settings.enabled:
         return
@@ -72,12 +74,12 @@ def instrument_otel(app: FastAPI) -> None:
             OTLPSpanExporter(
                 endpoint=otel_settings.grpc_endpoint,
                 insecure=otel_settings.grpc_insecure,
+                headers=headers,
             )
         )
     )
     trace.set_tracer_provider(tracer_provider)
     # http_exporter = httpOTPLMetricExporter()
-    headers = {"tenant_id": "lhcbdiracx-cert"}
     # metric_reader = PeriodicExportingMetricReader(ConsoleMetricExporter(),export_interval_millis=1000)
     metric_reader = PeriodicExportingMetricReader(
         OTLPMetricExporter(
@@ -103,6 +105,7 @@ def instrument_otel(app: FastAPI) -> None:
     otlp_exporter = OTLPLogExporter(
         endpoint=otel_settings.grpc_endpoint,
         insecure=otel_settings.grpc_insecure,
+        headers=headers,
     )
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(otlp_exporter))
     handler = LoggingHandler(level=logging.DEBUG, logger_provider=logger_provider)
