@@ -46,7 +46,7 @@ def instrument_otel(app: FastAPI) -> None:
     Note: this is highly experimental, and OpenTelemetry is a quickly moving target
 
     """
-    headers = {"tenant_id": "lhcbdiracx-cert", "X-Scope-OrgID": "lhcbdiracx-cert"}
+    headers = {"tenant_id": "lhcbdiracx-cert"}
 
     otel_settings = OTELSettings()
     if not otel_settings.enabled:
