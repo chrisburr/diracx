@@ -202,6 +202,9 @@ nav:
               - Client metapathfinder: dev/reference/client-metapathfinder.md
           - Web:
               - Coding conventions: dev/reference/web-coding-conventions.md
+    - Architecture Design Records:
+      - dev/architecture-design-records/index.md
+      - DX-ADR-001 - Tasks: adr/DX-ADR-001_tasks.md
 
 markdown_extensions:
   - admonition
