@@ -350,7 +350,10 @@ The state of the broker should be ephemeral and recreated with each update. Any 
 - Reduce the complexity of reasoning about updates which may change details of the broker's internal state.
 - Improve performance by removing the need to ensure every action is flushed to persistent storage.
 
-Upon first start, the broker is populated with the cron-style tasks as well as any pending reactive tasks that have been persisted in MySQL. The tasks which were persisted are those eligible for the dead letter queue.
+Upon first start:
+
+- broker startup entry points are called. These exist to allow databases which have track task-dependent states to be reset. For example, before jobs are eligible to run tasks must be ran to assign them to sites and perform sanity checks. Jobs which have an in-flight task are assigned a specific state (e.g. `PENDING`). Upon startup, any jobs in this state are reset to `RECEIVED` and the pending tasks for these jobs are cleared from the broker. This allows the system to recover from unexpected outages without manual intervention. This means that the state machine of DiracX objects must be designed with this behaviour in mind.
+- the broker is populated with the periodic tasks
 
 ## Rationale
 

@@ -24,6 +24,7 @@ This page documents the available pixi tasks.
 - `pytest-diracx-db`: Run the tests for diracx-db
 - `pytest-diracx-logic`: Run the tests for diracx-logic
 - `pytest-diracx-routers`: Run the tests for diracx-routers
+- `pytest-diracx-tasks`: Run the tests for diracx-tasks
 
 ## Documentation Tasks
 
