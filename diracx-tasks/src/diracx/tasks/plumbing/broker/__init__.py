@@ -8,6 +8,7 @@ from .models import (
     BrokerMessage,
     TaskMessage,
     TaskResult,
+    submit_task,
 )
 from .redis_streams import RedisStreamBroker
 
@@ -20,4 +21,5 @@ __all__ = [
     "AckableMessage",
     "AsyncDecoratedTask",
     "AsyncTask",
+    "submit_task",
 ]

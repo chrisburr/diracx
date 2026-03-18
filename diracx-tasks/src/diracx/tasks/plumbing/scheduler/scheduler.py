@@ -15,7 +15,7 @@ from redis.asyncio import BlockingConnectionPool, Redis
 from ..base_task import BaseTask, PeriodicBaseTask, PeriodicVoAwareBaseTask
 from ..broker._types import _BlockingConnectionPool
 from ..broker.base import AsyncBroker
-from ..broker.models import AsyncKicker, BrokerMessage
+from ..broker.models import BrokerMessage, submit_task
 
 if TYPE_CHECKING:
     from diracx.core.config import Config
@@ -268,13 +268,13 @@ class TaskScheduler:
             # VO is the first constructor argument for VO-aware tasks
             args.append(vo)
 
-        kicker: AsyncKicker = AsyncKicker(
-            task_name=task_name,
-            broker=self.broker,
-            labels=labels,
-        )
         try:
-            await kicker.kiq(*args)
+            await submit_task(
+                broker=self.broker,
+                task_name=task_name,
+                task_args=args,
+                labels=labels,
+            )
             logger.info("Submitted periodic task %s (vo=%s)", task_name, vo or "N/A")
         except Exception:
             logger.exception(

@@ -5,14 +5,15 @@ __all__ = [
     "BrokerMessage",
     "TaskResult",
     "AckableMessage",
-    "AsyncKicker",
     "AsyncDecoratedTask",
     "AsyncTask",
+    "submit_task",
 ]
 
 import asyncio
 import logging
 import traceback
+from collections.abc import Sequence
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from time import time
@@ -139,102 +140,89 @@ class AckableMessage(BaseModel):
     ack: Callable[[], Awaitable[None]]
 
 
-class AsyncKicker(Generic[_ReturnType]):
-    """Builds and sends task messages to the broker."""
+def _prepare_arg(arg: Any) -> Any:
+    """Convert BaseModel/dataclass arguments to dicts for serialization."""
+    if isinstance(arg, BaseModel):
+        arg = arg.model_dump()
+    if is_dataclass(arg) and not isinstance(arg, type):
+        arg = asdict(arg)
+    return arg
 
-    def __init__(
-        self,
-        task_name: str,
-        broker: AsyncBroker,
-        labels: dict[str, Any],
-    ) -> None:
-        self.task_name = task_name
-        self.broker = broker
-        self.labels = labels.copy()
-        self.custom_task_id: str | None = None
 
-    def with_labels(self, **labels: str | float) -> AsyncKicker[_ReturnType]:
-        self.labels.update(labels)
-        return self
+def _build_task_message(
+    broker: AsyncBroker,
+    task_name: str,
+    task_args: Sequence[Any],
+    task_kwargs: dict[str, Any],
+    labels: dict[str, Any],
+    task_id: str | None,
+) -> TaskMessage:
+    """Build a TaskMessage from the given arguments."""
+    formatted_args = [_prepare_arg(arg) for arg in task_args]
+    formatted_kwargs = {k: _prepare_arg(v) for k, v in task_kwargs.items()}
 
-    def with_task_id(self, task_id: str | None) -> AsyncKicker[_ReturnType]:
-        self.custom_task_id = task_id
-        return self
+    if task_id is None:
+        task_id = broker.id_generator()
 
-    async def kiq(self, *args: Any, **kwargs: Any) -> AsyncTask[_ReturnType]:
-        """Send the task to the broker for execution."""
-        task_message = self._prepare_message(*args, **kwargs)
-        broker_message = BrokerMessage.from_task_message(task_message)
+    return TaskMessage(
+        task_id=task_id,
+        task_name=task_name,
+        labels=labels,
+        task_args=formatted_args,
+        task_kwargs=formatted_kwargs,
+    )
 
-        try:
-            await self.broker.kick(broker_message)
-        except Exception as exc:
-            raise SendTaskError(
-                f"Failed to send task {self.task_name} to broker"
-            ) from exc
 
-        return AsyncTask[_ReturnType](
-            task_id=task_message.task_id,
-            result_backend=self.broker.result_backend,
-        )
+async def submit_task(
+    broker: AsyncBroker,
+    task_name: str,
+    task_args: Sequence[Any] = (),
+    task_kwargs: dict[str, Any] | None = None,
+    *,
+    labels: dict[str, Any] | None = None,
+    task_id: str | None = None,
+    run_at: datetime | None = None,
+) -> AsyncTask[Any]:
+    """Send a task to the broker for execution.
 
-    async def kiq_delayed(
-        self, run_at: datetime, *args: Any, **kwargs: Any
-    ) -> AsyncTask[_ReturnType]:
-        """Schedule the task for future execution via the delayed ZSET.
+    When ``run_at`` is provided, the task is added to the delayed ZSET
+    and will be promoted to a stream when the time arrives.
+    """
+    task_message = _build_task_message(
+        broker=broker,
+        task_name=task_name,
+        task_args=task_args,
+        task_kwargs=task_kwargs or {},
+        labels=labels or {},
+        task_id=task_id,
+    )
+    broker_message = BrokerMessage.from_task_message(task_message)
 
-        Instead of XADDing to a stream immediately, ZADDs to the delayed
-        sorted set. The scheduler's delayed poll loop promotes the task
-        to the appropriate stream when ``run_at`` arrives.
-        """
-        from ..scheduler.scheduler import TaskScheduler
-
-        task_message = self._prepare_message(*args, **kwargs)
-        broker_message = BrokerMessage.from_task_message(task_message)
-
+    if run_at is not None:
         from redis.asyncio import Redis
 
+        from ..scheduler.scheduler import TaskScheduler
+
         try:
-            redis = Redis(connection_pool=self.broker.connection_pool)
+            redis = Redis(connection_pool=broker.connection_pool)
             async with redis:
                 await TaskScheduler.schedule_delayed(redis, broker_message, run_at)
         except Exception as exc:
-            raise SendTaskError(
-                f"Failed to schedule delayed task {self.task_name}"
-            ) from exc
+            raise SendTaskError(f"Failed to schedule delayed task {task_name}") from exc
+    else:
+        try:
+            await broker.kick(broker_message)
+        except Exception as exc:
+            raise SendTaskError(f"Failed to send task {task_name} to broker") from exc
 
-        return AsyncTask[_ReturnType](
-            task_id=task_message.task_id,
-            result_backend=self.broker.result_backend,
-        )
-
-    @classmethod
-    def _prepare_arg(cls, arg: Any) -> Any:
-        if isinstance(arg, BaseModel):
-            arg = arg.model_dump()
-        if is_dataclass(arg) and not isinstance(arg, type):
-            arg = asdict(arg)
-        return arg
-
-    def _prepare_message(self, *args: Any, **kwargs: Any) -> TaskMessage:
-        formatted_args = [self._prepare_arg(arg) for arg in args]
-        formatted_kwargs = {k: self._prepare_arg(v) for k, v in kwargs.items()}
-
-        task_id = self.custom_task_id
-        if task_id is None:
-            task_id = self.broker.id_generator()
-
-        return TaskMessage(
-            task_id=task_id,
-            task_name=self.task_name,
-            labels=self.labels.copy(),
-            task_args=formatted_args,
-            task_kwargs=formatted_kwargs,
-        )
+    return AsyncTask[Any](
+        task_id=task_message.task_id,
+        result_backend=broker.result_backend,
+    )
 
 
 class AsyncDecoratedTask(Generic[_ReturnType]):
-    """Wrapper for task functions providing kiq() for broker dispatch."""
+    """Wrapper for task functions providing submit() for broker dispatch."""
 
     def __init__(
         self,
@@ -251,14 +239,23 @@ class AsyncDecoratedTask(Generic[_ReturnType]):
     def __call__(self, *args: Any, **kwargs: Any) -> _ReturnType:
         return self.original_func(*args, **kwargs)
 
-    async def kiq(self, *args: Any, **kwargs: Any) -> AsyncTask[_ReturnType]:
-        return await self.kicker().kiq(*args, **kwargs)
-
-    def kicker(self) -> AsyncKicker[_ReturnType]:
-        return AsyncKicker(
-            task_name=self.task_name,
+    async def submit(
+        self,
+        *args: Any,
+        labels: dict[str, Any] | None = None,
+        run_at: datetime | None = None,
+        **kwargs: Any,
+    ) -> AsyncTask[_ReturnType]:
+        merged_labels = {**self.labels}
+        if labels:
+            merged_labels.update(labels)
+        return await submit_task(
             broker=self.broker,
-            labels=self.labels.copy(),
+            task_name=self.task_name,
+            task_args=args,
+            task_kwargs=kwargs or None,
+            labels=merged_labels,
+            run_at=run_at,
         )
 
     def __repr__(self) -> str:

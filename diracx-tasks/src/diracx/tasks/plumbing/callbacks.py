@@ -106,7 +106,7 @@ async def fire_callback(
     Reads the callback data from Redis, builds a ``BrokerMessage``,
     and kicks it to the broker for execution.
     """
-    from .broker.models import AsyncKicker
+    from .broker.models import submit_task
 
     callback_data = await redis.get(f"{_group_key(group_id)}:callback")
     if callback_data is None:
@@ -117,12 +117,11 @@ async def fire_callback(
     task_class_path: str = payload["task_class"]
     task_args: list[Any] = payload["args"]
 
-    # Use the task class path as the task name for the kicker
-    kicker: AsyncKicker[Any] = AsyncKicker(
-        task_name=task_class_path,
+    await submit_task(
         broker=broker,
+        task_name=task_class_path,
+        task_args=task_args,
         labels={"callback_group_id": group_id},
     )
-    await kicker.kiq(*task_args)
 
     logger.info("Fired callback for group %s (task: %s)", group_id, task_class_path)

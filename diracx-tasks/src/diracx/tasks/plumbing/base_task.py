@@ -26,6 +26,9 @@ class BaseTask(ABC):
     retry_policy: ClassVar[RetryPolicyBase] = NoRetry()
     dlq_eligible: ClassVar[bool] = False
 
+    # ContextVar so concurrent async contexts (e.g. worker + scheduler in
+    # the same process, or parallel test cases) each get their own isolated
+    # broker binding without interfering with each other.
     _broker_registry: ClassVar[ContextVar[dict[type, AsyncDecoratedTask] | None]] = (
         ContextVar("_broker_registry", default=None)
     )
@@ -78,12 +81,9 @@ class BaseTask(ABC):
         if registry is None:
             raise RuntimeError("Task is not bound to a broker")
         broker_task = registry[self.__class__]
-        kicker = broker_task.kicker()
-        if labels:
-            kicker.labels.update(labels)
-        if at_time is not None:
-            return await kicker.kiq_delayed(at_time, *self.serialize())
-        return await kicker.kiq(*self.serialize())
+        return await broker_task.submit(
+            *self.serialize(), labels=labels, run_at=at_time
+        )
 
 
 class PeriodicBaseTask(BaseTask):
