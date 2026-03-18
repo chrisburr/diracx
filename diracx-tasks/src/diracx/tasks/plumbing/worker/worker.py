@@ -4,19 +4,45 @@ __all__ = ["Worker"]
 
 import asyncio
 import logging
+from datetime import UTC, datetime, timedelta
 from time import time
 from typing import Any, Callable
 
 import msgpack
+from opentelemetry import metrics, trace
+from redis.asyncio import Redis
 
+from ..base_task import BaseTask
 from ..broker.base import AsyncBroker
 from ..broker.models import AckableMessage, BrokerMessage, TaskMessage, TaskResult
+from ..callbacks import fire_callback, on_child_complete
+from ..exceptions import UnableToAcquireLockError
+from ..scheduler.scheduler import DELAYED_ZSET_KEY
 from .di_resolver import solve_task_dependencies
 
 logger = logging.getLogger(__name__)
 
+_tracer = trace.get_tracer(__name__)
+_meter = metrics.get_meter(__name__)
+_tasks_completed = _meter.create_counter(
+    "tasks_completed_total",
+    description="Total number of tasks completed successfully",
+)
+_tasks_failed = _meter.create_counter(
+    "tasks_failed_total",
+    description="Total number of tasks that failed",
+)
+_task_duration = _meter.create_histogram(
+    "task_duration_seconds",
+    description="Duration of task execution in seconds",
+    unit="s",
+)
+
 # Sentinel value to signal queue completion
 QUEUE_DONE = b"-1"
+
+# Default backoff for lock contention retries
+_LOCK_RETRY_DELAY_SECONDS = 5
 
 
 class Worker:
@@ -35,6 +61,9 @@ class Worker:
     acknowledges the message.  ``max_concurrent_tasks`` controls how
     many tasks execute in parallel (also semaphore-gated).
 
+    On failure, the worker consults the task's ``retry_policy`` to decide
+    whether to reschedule via the delayed ZSET or persist to the DLQ.
+
     Flow::
 
         Broker  ──▸  prefetcher  ──▸  queue  ──▸  runner  ──▸  task_func
@@ -49,11 +78,13 @@ class Worker:
         self,
         broker: AsyncBroker,
         task_registry: dict[str, Callable[..., Any]],
+        task_class_registry: dict[str, type[BaseTask]],
         max_concurrent_tasks: int = 10,
         max_prefetch: int = 0,
     ) -> None:
         self.broker = broker
         self.task_registry = task_registry
+        self.task_class_registry = task_class_registry
 
         self.sem: asyncio.Semaphore | None = None
         if max_concurrent_tasks > 0:
@@ -178,8 +209,16 @@ class Worker:
 
         logger.info("Runner stopped")
 
+    async def _get_redis(self) -> Redis:
+        """Get a Redis connection from the broker's connection pool."""
+        return Redis(connection_pool=self.broker.connection_pool)
+
     async def process_message(self, message: bytes | AckableMessage) -> None:
-        """Deserialize, look up, execute, and ack a single broker message."""
+        """Deserialize, look up, execute, and ack a single broker message.
+
+        After execution, handles retry scheduling or DLQ persistence for
+        failed tasks, and fires callbacks for group-member tasks.
+        """
         message_data = message.data if isinstance(message, AckableMessage) else message
 
         try:
@@ -188,11 +227,15 @@ class Worker:
             task_message = broker_msg.to_task_message()
         except Exception:
             logger.warning("Cannot parse message, skipping", exc_info=True)
+            if isinstance(message, AckableMessage):
+                await message.ack()
             return
 
         task_func = self.task_registry.get(task_message.task_name)
         if task_func is None:
             logger.warning("Task %r not found in registry", task_message.task_name)
+            if isinstance(message, AckableMessage):
+                await message.ack()
             return
 
         logger.info(
@@ -201,6 +244,15 @@ class Worker:
 
         result = await self.run_task(task_func, task_message)
 
+        # Handle failure: retry or DLQ
+        if result.is_err:
+            await self._handle_failure(task_message, result)
+
+        # Handle success: persist result and fire callbacks
+        if not result.is_err:
+            await self._handle_success(task_message, result)
+
+        # Always persist the result to the backend
         try:
             if self.broker.result_backend:
                 await self.broker.result_backend.set_result(
@@ -211,6 +263,128 @@ class Worker:
 
         if isinstance(message, AckableMessage):
             await message.ack()
+
+    async def _handle_failure(
+        self,
+        task_message: TaskMessage,
+        result: TaskResult[Any],
+    ) -> None:
+        """Consult retry policy and either reschedule or send to DLQ."""
+        task_cls = self.task_class_registry.get(task_message.task_name)
+        if task_cls is None:
+            logger.warning(
+                "Task class %r not in class registry, cannot retry",
+                task_message.task_name,
+            )
+            return
+
+        attempt = task_message.labels.get("_retry_attempt", 0)
+        error_msg = result.error.get("message", "") if result.error else ""
+
+        # Reconstruct exception for the retry policy
+        exc = Exception(error_msg)
+
+        retry_at = task_cls.retry_policy.schedule_retry(attempt + 1, exc)
+
+        if retry_at is not None:
+            await self._schedule_retry(task_message, retry_at, attempt + 1)
+        elif task_cls.dlq_eligible:
+            await self._send_to_dlq(task_message, task_cls, error_msg)
+        else:
+            logger.warning(
+                "Task %s (ID: %s) failed after %d attempts, discarding",
+                task_message.task_name,
+                task_message.task_id,
+                attempt + 1,
+            )
+
+    async def _schedule_retry(
+        self,
+        task_message: TaskMessage,
+        retry_at: datetime,
+        attempt: int,
+    ) -> None:
+        """Reschedule a failed task via the delayed ZSET."""
+        # Build a new TaskMessage with incremented retry attempt
+        retry_labels = {**task_message.labels, "_retry_attempt": attempt}
+        retry_task_message = TaskMessage(
+            task_id=self.broker.id_generator(),
+            task_name=task_message.task_name,
+            labels=retry_labels,
+            task_args=task_message.task_args,
+            task_kwargs=task_message.task_kwargs,
+        )
+        broker_message = BrokerMessage.from_task_message(retry_task_message)
+        serialized = msgpack.packb(broker_message.model_dump(), datetime=True)
+
+        try:
+            redis = await self._get_redis()
+            async with redis:
+                await redis.zadd(
+                    DELAYED_ZSET_KEY,
+                    {serialized: retry_at.timestamp()},
+                )
+            logger.info(
+                "Scheduled retry %d for task %s at %s",
+                attempt,
+                task_message.task_name,
+                retry_at.isoformat(),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to schedule retry for task %s", task_message.task_name
+            )
+
+    async def _send_to_dlq(
+        self,
+        task_message: TaskMessage,
+        task_cls: type[BaseTask],
+        error_msg: str,
+    ) -> None:
+        """Persist a permanently failed task to the Dead Letter Queue.
+
+        Full DLQ persistence requires the TaskDB dependency to be injected
+        into the worker. For now, log the intent.
+        """
+        logger.warning(
+            "Task %s (ID: %s) exhausted retries, DLQ-eligible. Error: %s",
+            task_message.task_name,
+            task_message.task_id,
+            error_msg,
+        )
+
+    async def _handle_success(
+        self,
+        task_message: TaskMessage,
+        result: TaskResult[Any],
+    ) -> None:
+        """Fire callbacks for group-member tasks on success."""
+        group_id = task_message.labels.get("group_id")
+        if not group_id:
+            return
+
+        try:
+            redis = await self._get_redis()
+            async with redis:
+                all_done = await on_child_complete(
+                    redis,
+                    group_id,
+                    task_message.task_id,
+                    result.return_value,
+                )
+                if all_done:
+                    await fire_callback(redis, group_id, self.broker)
+        except Exception:
+            logger.exception("Failed to process callback for group %s", group_id)
+
+    async def _handle_lock_retry(
+        self,
+        task_message: TaskMessage,
+    ) -> None:
+        """Reschedule a task that couldn't acquire a lock."""
+        retry_at = datetime.now(tz=UTC) + timedelta(seconds=_LOCK_RETRY_DELAY_SECONDS)
+        attempt = task_message.labels.get("_retry_attempt", 0)
+        await self._schedule_retry(task_message, retry_at, attempt)
 
     async def run_task(
         self,
@@ -224,7 +398,48 @@ class Worker:
         kwargs from the message, and calls the task.  Returns a
         ``TaskResult`` wrapping either the return value or the
         exception.
+
+        Passes a Redis connection as ``_redis`` for lock acquisition.
         """
+        retry_count = task_message.labels.get("_retry_attempt", 0)
+        span_attrs = {
+            "task.name": task_message.task_name,
+            "task.id": task_message.task_id,
+            "task.retry_count": retry_count,
+        }
+        # Add priority/size if present in labels
+        if "priority" in task_message.labels:
+            span_attrs["task.priority"] = str(task_message.labels["priority"])
+        if "size" in task_message.labels:
+            span_attrs["task.size"] = str(task_message.labels["size"])
+
+        with _tracer.start_as_current_span(
+            f"task.execute {task_message.task_name}",
+            attributes=span_attrs,
+        ) as span:
+            result = await self._execute_task(task_func, task_message)
+
+            # Record metrics
+            attrs = {"task_name": task_message.task_name}
+            _task_duration.record(result.execution_time, attributes=attrs)
+            if result.is_err:
+                _tasks_failed.add(1, attributes=attrs)
+                span.set_attribute("task.status", "error")
+                if result.error:
+                    span.set_attribute("task.error", result.error.get("message", ""))
+            else:
+                _tasks_completed.add(1, attributes=attrs)
+                span.set_attribute("task.status", "ok")
+            span.set_attribute("task.duration_ms", result.execution_time * 1000)
+
+        return result
+
+    async def _execute_task(
+        self,
+        task_func: Callable[..., Any],
+        task_message: TaskMessage,
+    ) -> TaskResult[Any]:
+        """Inner task execution logic."""
         start_time = time()
         returned = None
         found_exception: BaseException | None = None
@@ -240,12 +455,37 @@ class Worker:
                     dependency_context=self.broker.custom_dependency_context,
                 )
 
-            all_kwargs = {**dep_kwargs, **task_message.task_kwargs}
-
-            returned = await task_func(*task_message.task_args, **all_kwargs)
+            # Obtain a Redis connection for lock acquisition
+            redis = await self._get_redis()
+            async with redis:
+                all_kwargs = {
+                    **dep_kwargs,
+                    **task_message.task_kwargs,
+                    "_redis": redis,
+                }
+                returned = await task_func(*task_message.task_args, **all_kwargs)
 
             if async_exit_stack:
                 await async_exit_stack.aclose()
+
+        except UnableToAcquireLockError:
+            if async_exit_stack:
+                try:
+                    await async_exit_stack.aclose()
+                except Exception:
+                    logger.debug("Error closing exit stack", exc_info=True)
+            logger.info(
+                "Lock contention for task %s, rescheduling",
+                task_message.task_name,
+            )
+            await self._handle_lock_retry(task_message)
+            # Return a non-error result so process_message doesn't
+            # double-handle this as a failure
+            return TaskResult.from_value(
+                value=None,
+                execution_time=time() - start_time,
+                labels={**task_message.labels, "_lock_retry": True},
+            )
 
         except BaseException as exc:
             found_exception = exc

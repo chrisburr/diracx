@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-__all__ = ["spawn_with_callback"]
+__all__ = ["spawn_with_callback", "fire_callback"]
 
 import asyncio
 import logging
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import msgpack
 from redis.asyncio import Redis
 
 from .base_task import BaseTask
+
+if TYPE_CHECKING:
+    from .broker.base import AsyncBroker
 
 logger = logging.getLogger(__name__)
 
@@ -87,3 +90,36 @@ async def on_child_complete(
     # Atomically decrement remaining counter
     remaining = await redis.decr(f"{_group_key(group_id)}:remaining")
     return remaining <= 0
+
+
+async def fire_callback(
+    redis: Redis,
+    group_id: str,
+    broker: AsyncBroker,
+) -> None:
+    """Deserialize and schedule the callback task for a completed group.
+
+    Called by the worker when ``on_child_complete`` returns True.
+    Reads the callback data from Redis, builds a ``BrokerMessage``,
+    and kicks it to the broker for execution.
+    """
+    from .broker.models import AsyncKicker
+
+    callback_data = await redis.get(f"{_group_key(group_id)}:callback")
+    if callback_data is None:
+        logger.warning("No callback data found for group %s", group_id)
+        return
+
+    payload = msgpack.unpackb(callback_data, timestamp=3)
+    task_class_path: str = payload["task_class"]
+    task_args: list[Any] = payload["args"]
+
+    # Use the task class path as the task name for the kicker
+    kicker: AsyncKicker[Any] = AsyncKicker(
+        task_name=task_class_path,
+        broker=broker,
+        labels={"callback_group_id": group_id},
+    )
+    await kicker.kiq(*task_args)
+
+    logger.info("Fired callback for group %s (task: %s)", group_id, task_class_path)

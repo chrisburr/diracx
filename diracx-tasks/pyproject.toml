@@ -19,6 +19,7 @@ dependencies = [
     "fastapi>=0.121.0",
     "redis[hiredis]",
     "msgpack",
+    "opentelemetry-api",
     "python-dateutil",
     "croniter",
     "pydantic >=2.10",

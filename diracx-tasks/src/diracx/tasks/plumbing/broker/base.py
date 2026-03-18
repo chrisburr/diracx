@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Callable
 from uuid import uuid4
 
+from ._types import _BlockingConnectionPool
 from .models import AckableMessage, BrokerMessage
 from .result_backend import AsyncResultBackend
 
@@ -16,6 +17,8 @@ def _default_id_generator() -> str:
 
 class AsyncBroker(ABC):
     """Abstract base class for task brokers."""
+
+    connection_pool: _BlockingConnectionPool
 
     def __init__(
         self,

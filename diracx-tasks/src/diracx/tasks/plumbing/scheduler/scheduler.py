@@ -5,7 +5,7 @@ __all__ = ["TaskScheduler"]
 import asyncio
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import msgpack
 from redis.asyncio import BlockingConnectionPool, Redis
@@ -14,6 +14,9 @@ from ..base_task import BaseTask, PeriodicBaseTask, PeriodicVoAwareBaseTask
 from ..broker._types import _BlockingConnectionPool
 from ..broker.base import AsyncBroker
 from ..broker.models import AsyncKicker, BrokerMessage
+
+if TYPE_CHECKING:
+    from diracx.core.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +63,7 @@ class TaskScheduler:
         redis_url: str,
         *,
         task_registry: dict[str, type[BaseTask]] | None = None,
+        config: Config | None = None,
         prefix: str = "diracx:scheduler",
         check_interval: float = 10.0,
         delayed_poll_interval: float = 1.0,
@@ -71,6 +75,7 @@ class TaskScheduler:
         self.check_interval = check_interval
         self.delayed_poll_interval = delayed_poll_interval
         self.task_registry = task_registry or {}
+        self._config = config
         self.connection_pool: _BlockingConnectionPool = BlockingConnectionPool.from_url(
             url=redis_url,
             max_connections=max_connection_pool_size,
@@ -160,18 +165,39 @@ class TaskScheduler:
                 except asyncio.TimeoutError:
                     pass
 
+    def load_vos(self) -> list[str]:
+        """Load the list of VOs from the DiracX configuration.
+
+        Reads from the Config object's Registry section, where each
+        key is a VO name.
+        """
+        if self._config is None:
+            logger.warning("No config available, cannot load VOs")
+            return []
+        return list(self._config.Registry)
+
     def _compute_initial_schedules(self) -> None:
         """Compute the initial next-run times for all periodic tasks."""
+        vos = self.load_vos()
+
         for task_name, task_cls in self.task_registry.items():
             if not issubclass(task_cls, PeriodicBaseTask):
                 continue
             if not getattr(task_cls, "_enabled", True):
                 continue
-            if issubclass(task_cls, PeriodicVoAwareBaseTask):
-                # VOs will be populated from config; placeholder for now
-                continue
             schedule = task_cls.default_schedule
-            self._next_runs[(task_name, "")] = schedule.next_occurrence()
+
+            if issubclass(task_cls, PeriodicVoAwareBaseTask):
+                if not vos:
+                    logger.warning(
+                        "No VOs configured, skipping VO-aware task %s",
+                        task_name,
+                    )
+                    continue
+                for vo in vos:
+                    self.add_vo_schedule(task_name, vo, schedule.next_occurrence())
+            else:
+                self._next_runs[(task_name, "")] = schedule.next_occurrence()
 
     def add_vo_schedule(self, task_name: str, vo: str, next_run: datetime) -> None:
         """Register a VO-specific periodic task schedule."""

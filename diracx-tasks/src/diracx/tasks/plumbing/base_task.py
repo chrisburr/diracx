@@ -61,15 +61,17 @@ class BaseTask(ABC):
         return ()
 
     async def schedule(self, *, at_time: datetime | None = None) -> AsyncTask:
-        """Schedule the task for execution via the broker."""
+        """Schedule the task for execution via the broker.
+
+        When ``at_time`` is provided, the task is added to the delayed
+        ZSET and will be promoted to a stream when the time arrives.
+        """
         registry = self._broker_registry.get()
         if registry is None:
             raise RuntimeError("Task is not bound to a broker")
         broker_task = registry[self.__class__]
         if at_time is not None:
-            raise NotImplementedError(
-                "Scheduling at a specific time is not yet implemented"
-            )
+            return await broker_task.kicker().kiq_delayed(at_time, *self.serialize())
         return await broker_task.kiq(*self.serialize())
 
 

@@ -14,6 +14,7 @@ import asyncio
 import logging
 import traceback
 from dataclasses import asdict, is_dataclass
+from datetime import datetime
 from time import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Generic, TypeVar
 
@@ -170,6 +171,36 @@ class AsyncKicker(Generic[_ReturnType]):
         except Exception as exc:
             raise SendTaskError(
                 f"Failed to send task {self.task_name} to broker"
+            ) from exc
+
+        return AsyncTask[_ReturnType](
+            task_id=task_message.task_id,
+            result_backend=self.broker.result_backend,
+        )
+
+    async def kiq_delayed(
+        self, run_at: datetime, *args: Any, **kwargs: Any
+    ) -> AsyncTask[_ReturnType]:
+        """Schedule the task for future execution via the delayed ZSET.
+
+        Instead of XADDing to a stream immediately, ZADDs to the delayed
+        sorted set. The scheduler's delayed poll loop promotes the task
+        to the appropriate stream when ``run_at`` arrives.
+        """
+        from ..scheduler.scheduler import TaskScheduler
+
+        task_message = self._prepare_message(*args, **kwargs)
+        broker_message = BrokerMessage.from_task_message(task_message)
+
+        from redis.asyncio import Redis
+
+        try:
+            redis = Redis(connection_pool=self.broker.connection_pool)
+            async with redis:
+                await TaskScheduler.schedule_delayed(redis, broker_message, run_at)
+        except Exception as exc:
+            raise SendTaskError(
+                f"Failed to schedule delayed task {self.task_name}"
             ) from exc
 
         return AsyncTask[_ReturnType](

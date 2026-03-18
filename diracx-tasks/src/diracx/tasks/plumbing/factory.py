@@ -9,32 +9,54 @@ from inspect import Parameter, signature
 from typing import Any, Callable
 
 from fastapi.dependencies.utils import get_dependant
+from redis.asyncio import Redis
 
 from diracx.core.extensions import select_from_extension
 
 from .base_task import BaseTask
 from .broker.models import AsyncDecoratedTask
+from .locks import BaseLimiter, BaseLock
 
 logger = logging.getLogger(__name__)
 
 
-async def task_wrapper(cls: type[BaseTask], *args: Any, **kwargs: Any) -> Any:
+async def task_wrapper(  # noqa: D417
+    cls: type[BaseTask],
+    *args: Any,
+    _redis: Redis | None = None,
+    _interactive: bool = False,
+    **kwargs: Any,
+) -> Any:
     """Instantiate a task, acquire locks, and execute it.
 
     ``args`` are the task's constructor arguments (from serialization).
     ``kwargs`` are resolved DI dependencies for ``execute()``.
+
+    Parameters
+    ----------
+        _redis: Redis connection for lock acquisition. When None, locks
+            are skipped with a warning.
+        _interactive: When True, ``BaseLimiter`` subclasses (rate limiters,
+            concurrency limiters) are skipped entirely — only hard locks
+            (mutex, RW) are acquired.
+
     """
     task = cls(*args)
-    held_locks: list[Any] = []
-    # Pop redis once before the loop — otherwise only the first lock gets it
-    redis = kwargs.pop("_redis", None)
+    held_locks: list[tuple[BaseLock, Redis]] = []
     try:
         for lock in task.execution_locks:
-            acquired = await lock.acquire(redis) if redis else True
+            # In interactive mode, skip limiters entirely
+            if _interactive and isinstance(lock, BaseLimiter):
+                continue
+
+            if _redis is None:
+                logger.warning("No Redis connection — skipping lock %s", lock.redis_key)
+                continue
+
+            acquired = await lock.acquire(_redis)
             if acquired:
-                held_locks.append((lock, redis))
+                held_locks.append((lock, _redis))
             else:
-                # Reschedule with backoff
                 from .exceptions import UnableToAcquireLockError
 
                 raise UnableToAcquireLockError(
@@ -44,9 +66,8 @@ async def task_wrapper(cls: type[BaseTask], *args: Any, **kwargs: Any) -> Any:
         result = await task.execute(**kwargs)
         return result
     finally:
-        for lock, redis in held_locks:
-            if redis:
-                await lock.release(redis)
+        for lock, conn in held_locks:
+            await lock.release(conn)
 
 
 def wrap_task(cls: type[BaseTask]) -> Callable[..., Any]:
