@@ -2,7 +2,6 @@ from __future__ import annotations
 
 __all__ = [
     "TaskMessage",
-    "BrokerMessage",
     "TaskResult",
     "AckableMessage",
     "AsyncDecoratedTask",
@@ -39,7 +38,10 @@ _ReturnType = TypeVar("_ReturnType")
 
 
 class TaskMessage(BaseModel):
-    """Internal message format used by the task system."""
+    """Wire-protocol message for the task system.
+
+    Serialized directly to msgpack for the broker — no intermediate wrapper.
+    """
 
     task_id: str
     task_name: str
@@ -47,34 +49,12 @@ class TaskMessage(BaseModel):
     task_args: list[Any]
     task_kwargs: dict[str, Any]
 
-
-class BrokerMessage(BaseModel):
-    """Wire-protocol message wrapping a TaskMessage."""
-
-    task_id: str
-    task_name: str
-    message: bytes  # serialized TaskMessage (msgpack)
-    labels: dict[str, Any]
-
-    @staticmethod
-    def dumpb(value: TaskMessage) -> bytes:
-        return msgpack.packb(value.model_dump(), datetime=True)
-
-    @staticmethod
-    def loadb(data: bytes) -> TaskMessage:
-        return TaskMessage.model_validate(msgpack.unpackb(data, timestamp=3))
+    def dumpb(self) -> bytes:
+        return msgpack.packb(self.model_dump(), datetime=True)
 
     @classmethod
-    def from_task_message(cls, task_message: TaskMessage) -> BrokerMessage:
-        return cls(
-            task_id=task_message.task_id,
-            task_name=task_message.task_name,
-            message=cls.dumpb(task_message),
-            labels=task_message.labels,
-        )
-
-    def to_task_message(self) -> TaskMessage:
-        return self.loadb(self.message)
+    def loadb(cls, data: bytes) -> TaskMessage:
+        return cls.model_validate(msgpack.unpackb(data, timestamp=3))
 
 
 class TaskResult(BaseModel, Generic[_ReturnType]):
@@ -126,8 +106,7 @@ class TaskResult(BaseModel, Generic[_ReturnType]):
 
     def raise_for_error(self) -> TaskResult[_ReturnType]:
         if self.is_err and self.error:
-            exc = Exception(f"{self.error['type']}: {self.error['message']}")
-            raise exc
+            raise Exception(f"[{self.error['type']}] {self.error['message']}")
         return self
 
 
@@ -196,7 +175,6 @@ async def submit_task(
         labels=labels or {},
         task_id=task_id,
     )
-    broker_message = BrokerMessage.from_task_message(task_message)
 
     if run_at is not None:
         from redis.asyncio import Redis
@@ -206,12 +184,12 @@ async def submit_task(
         try:
             redis = Redis(connection_pool=broker.connection_pool)
             async with redis:
-                await TaskScheduler.schedule_delayed(redis, broker_message, run_at)
+                await TaskScheduler.schedule_delayed(redis, task_message, run_at)
         except Exception as exc:
             raise SendTaskError(f"Failed to schedule delayed task {task_name}") from exc
     else:
         try:
-            await broker.enqueue(broker_message)
+            await broker.enqueue(task_message)
         except Exception as exc:
             raise SendTaskError(f"Failed to send task {task_name} to broker") from exc
 

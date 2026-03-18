@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
-import msgpack
-
-from diracx.tasks.plumbing.broker.models import BrokerMessage, TaskMessage, TaskResult
+from diracx.tasks.plumbing.broker.models import TaskMessage, TaskResult
 from diracx.tasks.plumbing.worker.worker import Worker
 
 from .conftest import FailOnceTask
@@ -14,8 +12,7 @@ from .conftest import FailOnceTask
 
 def _make_ackable(task_message: TaskMessage):
     """Create a raw bytes message (non-ackable) from a TaskMessage."""
-    broker_msg = BrokerMessage.from_task_message(task_message)
-    return msgpack.packb(broker_msg.model_dump(), datetime=True)
+    return task_message.dumpb()
 
 
 # ---------------------------------------------------------------------------

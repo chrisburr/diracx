@@ -44,10 +44,21 @@ async def spawn_with_callback(
     """
     group_id = uuid.uuid4().hex
 
+    # Look up the callback's registered task name from the broker registry
+    registry = BaseTask._broker_registry.get()
+    if registry is None:
+        raise RuntimeError("Tasks must be bound to a broker before spawning callbacks")
+    decorated = registry.get(type(callback))
+    if decorated is None:
+        raise ValueError(
+            f"Callback task {type(callback).__name__} not found in broker registry"
+        )
+    task_name = decorated.task_name
+
     # Store callback task
     callback_data = msgpack.packb(
         {
-            "task_class": f"{callback.__class__.__module__}:{callback.__class__.__qualname__}",
+            "task_class": task_name,
             "args": list(callback.serialize()),
         },
         datetime=True,
@@ -103,8 +114,8 @@ async def fire_callback(
     """Deserialize and schedule the callback task for a completed group.
 
     Called by the worker when ``on_child_complete`` returns True.
-    Reads the callback data from Redis, builds a ``BrokerMessage``,
-    and kicks it to the broker for execution.
+    Reads the callback data from Redis and submits the task to the
+    broker for execution.
     """
     from .broker.models import submit_task
 

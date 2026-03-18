@@ -15,7 +15,6 @@ async def solve_task_dependencies(
     *,
     call: Callable[..., Any],
     dependency_overrides: dict[Callable[..., Any], Callable[..., Any]] | None = None,
-    dependency_context: dict[type, Any] | None = None,
 ) -> tuple[dict[str, Any], AsyncExitStack]:
     """Resolve FastAPI-style Depends() annotations for a background task.
 

@@ -8,13 +8,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-import msgpack
 from opentelemetry import metrics
 from redis.asyncio import BlockingConnectionPool, Redis
 
 from ..base_task import BaseTask, PeriodicBaseTask, PeriodicVoAwareBaseTask
 from ..broker._types import _BlockingConnectionPool
-from ..broker.models import BrokerMessage, submit_task
+from ..broker.models import TaskMessage, submit_task
 from ..broker.redis_streams import RedisStreamBroker
 
 if TYPE_CHECKING:
@@ -25,6 +24,24 @@ _meter = metrics.get_meter(__name__)
 
 SCHEDULER_LOCK_KEY = "diracx:scheduler:lock"
 SCHEDULER_LOCK_TTL_SECONDS = 30
+
+# Lua script: release the scheduler lock only if we still own it
+_RELEASE_LOCK_SCRIPT = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+"""
+
+# Lua script: extend the scheduler lock TTL only if we still own it
+_EXTEND_LOCK_SCRIPT = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("expire", KEYS[1], ARGV[2])
+else
+    return 0
+end
+"""
 
 # Lua script for atomic delayed-task promotion.
 # For each due member: remove from ZSET, deserialize with cmsgpack to
@@ -74,6 +91,7 @@ class TaskScheduler:
         check_interval: float = 10.0,
         delayed_poll_interval: float = 1.0,
         config_watch_interval: float = 60.0,
+        delayed_batch_size: int = 100,
         max_connection_pool_size: int | None = None,
         **connection_kwargs: Any,
     ) -> None:
@@ -82,6 +100,7 @@ class TaskScheduler:
         self.check_interval = check_interval
         self.delayed_poll_interval = delayed_poll_interval
         self.config_watch_interval = config_watch_interval
+        self.delayed_batch_size = delayed_batch_size
         self.task_registry = task_registry or {}
         self._config = config
         self._instance_id = uuid4().hex
@@ -194,7 +213,7 @@ class TaskScheduler:
                         1,
                         DELAYED_ZSET_KEY,
                         str(now_ts),
-                        "100",
+                        str(self.delayed_batch_size),
                     )
                     if promoted:
                         logger.debug("Promoted %d delayed tasks to streams", promoted)
@@ -301,24 +320,26 @@ class TaskScheduler:
             )
 
     async def _release_scheduler_lock(self) -> None:
-        """Release the lock only if we still own it."""
+        """Release the lock only if we still own it (atomic via Lua)."""
         async with Redis(connection_pool=self.connection_pool) as redis:
-            current = await redis.get(SCHEDULER_LOCK_KEY)
-            if current == self._instance_id.encode():
-                await redis.delete(SCHEDULER_LOCK_KEY)
+            await redis.eval(  # type: ignore[arg-type]
+                _RELEASE_LOCK_SCRIPT, 1, SCHEDULER_LOCK_KEY, self._instance_id
+            )
 
     async def _lock_extend_loop(self, finish_event: asyncio.Event) -> None:
-        """Periodically extend the scheduler lock TTL."""
+        """Periodically extend the scheduler lock TTL (atomic via Lua)."""
         interval = SCHEDULER_LOCK_TTL_SECONDS / 3
         async with Redis(connection_pool=self.connection_pool) as redis:
             while not finish_event.is_set():
                 try:
-                    current = await redis.get(SCHEDULER_LOCK_KEY)
-                    if current == self._instance_id.encode():
-                        await redis.expire(
-                            SCHEDULER_LOCK_KEY, SCHEDULER_LOCK_TTL_SECONDS
-                        )
-                    else:
+                    result = await redis.eval(  # type: ignore[arg-type]
+                        _EXTEND_LOCK_SCRIPT,
+                        1,
+                        SCHEDULER_LOCK_KEY,
+                        self._instance_id,
+                        str(SCHEDULER_LOCK_TTL_SECONDS),
+                    )
+                    if not result:
                         logger.error("Lost scheduler lock, shutting down")
                         finish_event.set()
                         return
@@ -393,12 +414,11 @@ class TaskScheduler:
     @staticmethod
     async def schedule_delayed(
         redis: Redis,
-        message: BrokerMessage,
+        message: TaskMessage,
         run_at: datetime,
     ) -> None:
         """Add a task to the delayed ZSET for future execution."""
-        serialized = msgpack.packb(message.model_dump(), datetime=True)
         await redis.zadd(
             DELAYED_ZSET_KEY,
-            {serialized: run_at.timestamp()},
+            {message.dumpb(): run_at.timestamp()},
         )

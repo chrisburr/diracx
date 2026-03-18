@@ -7,12 +7,11 @@ from typing import Any
 
 import fakeredis
 import fakeredis.aioredis
-import msgpack
 import pytest
 from redis.asyncio import Redis
 
 from diracx.tasks.plumbing.base_task import BaseTask
-from diracx.tasks.plumbing.broker.models import BrokerMessage
+from diracx.tasks.plumbing.broker.models import TaskMessage
 from diracx.tasks.plumbing.broker.redis_streams import (
     ALL_STREAM_NAMES,
     RedisStreamBroker,
@@ -35,10 +34,6 @@ class SuccessTask(BaseTask):
     size = Size.SMALL
     retry_policy = NoRetry()
 
-    @property
-    def execution_locks(self) -> list[BaseLock]:
-        return []
-
     async def execute(self, **kwargs: Any) -> str:
         return "ok"
 
@@ -51,10 +46,6 @@ class FailOnceTask(BaseTask):
     priority = Priority.NORMAL
     size = Size.SMALL
     retry_policy = ExponentialBackoff(base_delay_seconds=1, max_retries=3)
-
-    @property
-    def execution_locks(self) -> list[BaseLock]:
-        return []
 
     async def execute(self, **kwargs: Any) -> str:
         # Use a class-level counter to track calls across instances
@@ -71,10 +62,6 @@ class DLQTask(BaseTask):
     size = Size.MEDIUM
     retry_policy = NoRetry()
     dlq_eligible = True
-
-    @property
-    def execution_locks(self) -> list[BaseLock]:
-        return []
 
     async def execute(self, **kwargs: Any) -> str:
         raise RuntimeError("Always fails")
@@ -100,15 +87,14 @@ class LockedTask(BaseTask):
 # ---------------------------------------------------------------------------
 
 
-async def get_enqueued_messages(broker: RedisStreamBroker) -> list[BrokerMessage]:
+async def get_enqueued_messages(broker: RedisStreamBroker) -> list[TaskMessage]:
     """Read all messages from all broker streams."""
     messages = []
     async with Redis(connection_pool=broker.connection_pool) as redis:
         for stream in ALL_STREAM_NAMES:
             entries = await redis.xrange(stream)
             for _, fields in entries:
-                msg = msgpack.unpackb(fields[b"data"], timestamp=3)
-                messages.append(BrokerMessage.model_validate(msg))
+                messages.append(TaskMessage.loadb(fields[b"data"]))
     return messages
 
 

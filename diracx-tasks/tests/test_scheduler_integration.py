@@ -156,5 +156,4 @@ async def test_submit_vo_aware_periodic_task(broker):
     assert len(messages) == 1
     assert messages[0].labels["vo"] == "lhcb"
     # The VO should be in the task message args
-    inner = messages[0].to_task_message()
-    assert inner.task_args == ["lhcb"]
+    assert messages[0].task_args == ["lhcb"]

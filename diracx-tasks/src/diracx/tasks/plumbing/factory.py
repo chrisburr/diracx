@@ -2,6 +2,7 @@ from __future__ import annotations
 
 __all__ = ["task_wrapper", "wrap_task", "load_task_registry"]
 
+import asyncio
 import logging
 from functools import partial
 from importlib.metadata import entry_points
@@ -18,6 +19,27 @@ from .broker.models import AsyncDecoratedTask
 from .locks import BaseLimiter, BaseLock
 
 logger = logging.getLogger(__name__)
+
+
+async def _lock_watchdog(
+    held_locks: list[tuple[BaseLock, Redis]],
+    stop_event: asyncio.Event,
+    interval: float = 10.0,
+) -> None:
+    """Periodically extend lock TTLs while a task is running."""
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            return
+        except asyncio.TimeoutError:
+            pass
+        for lock, redis_conn in held_locks:
+            try:
+                await lock.extend(redis_conn)
+            except Exception:
+                logger.warning(
+                    "Failed to extend lock %s", lock.redis_key, exc_info=True
+                )
 
 
 async def task_wrapper(  # noqa: D417
@@ -43,6 +65,7 @@ async def task_wrapper(  # noqa: D417
     """
     task = cls(*args)
     held_locks: list[tuple[BaseLock, Redis]] = []
+    watchdog_task: asyncio.Task[None] | None = None
     try:
         for lock in task.execution_locks:
             # In interactive mode, skip limiters entirely
@@ -63,9 +86,21 @@ async def task_wrapper(  # noqa: D417
                     f"Could not acquire lock {lock.redis_key}"
                 )
 
+        # Start watchdog to extend lock TTLs during execution
+        stop_event = asyncio.Event()
+        if held_locks:
+            watchdog_task = asyncio.create_task(_lock_watchdog(held_locks, stop_event))
+
         result = await task.execute(**kwargs)
         return result
     finally:
+        if watchdog_task is not None:
+            stop_event.set()
+            watchdog_task.cancel()
+            try:
+                await watchdog_task
+            except asyncio.CancelledError:
+                pass
         for lock, conn in held_locks:
             await lock.release(conn)
 

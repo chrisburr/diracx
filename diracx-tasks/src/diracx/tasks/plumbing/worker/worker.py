@@ -13,7 +13,7 @@ from opentelemetry import metrics, trace
 from redis.asyncio import Redis
 
 from ..base_task import BaseTask
-from ..broker.models import AckableMessage, BrokerMessage, TaskMessage, TaskResult
+from ..broker.models import AckableMessage, TaskMessage, TaskResult
 from ..broker.redis_streams import RedisStreamBroker
 from ..callbacks import fire_callback, on_child_complete
 from ..exceptions import UnableToAcquireLockError
@@ -225,11 +225,13 @@ class Worker:
         message_data = message.data if isinstance(message, AckableMessage) else message
 
         try:
-            broker_msg_dict = msgpack.unpackb(message_data, timestamp=3)
-            broker_msg = BrokerMessage.model_validate(broker_msg_dict)
-            task_message = broker_msg.to_task_message()
+            task_message = TaskMessage.loadb(message_data)
         except Exception:
-            logger.warning("Cannot parse message, skipping", exc_info=True)
+            logger.warning(
+                "Cannot parse message (first 200 bytes: %s), skipping",
+                message_data[:200].hex(),
+                exc_info=True,
+            )
             if isinstance(message, AckableMessage):
                 await message.ack()
             return
@@ -282,10 +284,12 @@ class Worker:
             return
 
         attempt = task_message.labels.get("_retry_attempt", 0)
-        error_msg = result.error.get("message", "") if result.error else ""
+        error_info = result.error or {}
+        error_type = error_info.get("type", "Exception")
+        error_msg = error_info.get("message", "")
 
         # Reconstruct exception for the retry policy
-        exc = Exception(error_msg)
+        exc = Exception(f"[{error_type}] {error_msg}")
 
         retry_at = task_cls.retry_policy.schedule_retry(attempt + 1, exc)
 
@@ -317,15 +321,13 @@ class Worker:
             task_args=task_message.task_args,
             task_kwargs=task_message.task_kwargs,
         )
-        broker_message = BrokerMessage.from_task_message(retry_task_message)
-        serialized = msgpack.packb(broker_message.model_dump(), datetime=True)
 
         try:
             redis = await self._get_redis()
             async with redis:
                 await redis.zadd(
                     DELAYED_ZSET_KEY,
-                    {serialized: retry_at.timestamp()},
+                    {retry_task_message.dumpb(): retry_at.timestamp()},
                 )
             logger.info(
                 "Scheduled retry %d for task %s at %s",
@@ -480,7 +482,6 @@ class Worker:
                 dep_kwargs, async_exit_stack = await solve_task_dependencies(
                     call=task_func,
                     dependency_overrides=self.broker.dependency_overrides,
-                    dependency_context=self.broker.custom_dependency_context,
                 )
 
             # Obtain a Redis connection for lock acquisition

@@ -9,12 +9,11 @@ import uuid
 from typing import Any, AsyncGenerator, Awaitable, Callable
 from uuid import uuid4
 
-import msgpack
 from redis.asyncio import BlockingConnectionPool, Redis, ResponseError
 
 from ..enums import Priority, Size
 from ._types import _BlockingConnectionPool
-from .models import AckableMessage, BrokerMessage
+from .models import AckableMessage, TaskMessage
 from .result_backend import RedisResultBackend
 
 logger = logging.getLogger(__name__)
@@ -62,7 +61,6 @@ class RedisStreamBroker:
         self.id_generator = task_id_generator or _default_id_generator
         self.is_worker_process = False
         self.is_scheduler_process = False
-        self.custom_dependency_context: dict[type, Any] = {}
         self.dependency_overrides: dict[Callable, Callable] = {}
 
         self.connection_pool: _BlockingConnectionPool = BlockingConnectionPool.from_url(
@@ -113,17 +111,16 @@ class RedisStreamBroker:
             await self.result_backend.shutdown()
         await self.connection_pool.disconnect()
 
-    async def enqueue(self, message: BrokerMessage) -> None:
+    async def enqueue(self, message: TaskMessage) -> None:
         """Send a message to the appropriate priority x size stream."""
         priority = message.labels.get("priority", Priority.NORMAL)
         size = message.labels.get("size", Size.MEDIUM)
         target_stream = stream_name_for(priority, size)
 
         async with Redis(connection_pool=self.connection_pool) as redis:
-            serialized = msgpack.packb(message.model_dump(), datetime=True)
             await redis.xadd(
                 target_stream,
-                {b"data": serialized},
+                {b"data": message.dumpb()},
                 maxlen=self.maxlen,
                 approximate=self.approximate,
             )

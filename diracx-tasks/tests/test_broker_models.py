@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from diracx.tasks.plumbing.broker.models import (
-    BrokerMessage,
     TaskMessage,
     TaskResult,
 )
@@ -18,13 +17,9 @@ def test_task_message_roundtrip():
         task_kwargs={},
     )
 
-    # Serialize to BrokerMessage and back
-    broker_msg = BrokerMessage.from_task_message(msg)
-    assert broker_msg.task_id == "abc123"
-    assert broker_msg.task_name == "test:MyTask"
-
-    # Roundtrip
-    recovered = broker_msg.to_task_message()
+    # Serialize and deserialize
+    data = msg.dumpb()
+    recovered = TaskMessage.loadb(data)
     assert recovered.task_id == msg.task_id
     assert recovered.task_name == msg.task_name
     assert recovered.task_args == msg.task_args
@@ -62,5 +57,5 @@ def test_task_result_raise_for_error():
     error_result = TaskResult.from_exception(
         exc=RuntimeError("boom"), execution_time=0.0
     )
-    with pytest.raises(Exception, match="RuntimeError: boom"):
+    with pytest.raises(Exception, match=r"\[RuntimeError\] boom"):
         error_result.raise_for_error()

@@ -4,7 +4,6 @@ from .models import (
     AckableMessage,
     AsyncDecoratedTask,
     AsyncTask,
-    BrokerMessage,
     TaskMessage,
     TaskResult,
     submit_task,
@@ -15,7 +14,6 @@ from .result_backend import RedisResultBackend
 __all__ = [
     "RedisStreamBroker",
     "RedisResultBackend",
-    "BrokerMessage",
     "TaskMessage",
     "TaskResult",
     "AckableMessage",

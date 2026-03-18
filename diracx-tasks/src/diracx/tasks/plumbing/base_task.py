@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from .enums import Priority, Size
 from .lock_registry import TASK, LockedObjectType
-from .locks import BaseLock, MutexLock
+from .locks import BaseLock, ConcurrencyLimiter, MutexLock, RateLimiter
 from .retry_policies import NoRetry, RetryPolicyBase
 from .schedules import TaskScheduleBase
 
@@ -47,10 +47,16 @@ class BaseTask(ABC):
         cls._broker_registry.set(broker_task_mapping)
 
     @property
-    @abstractmethod
     def execution_locks(self) -> list[BaseLock]:
-        """Return a list of locks required by this task."""
-        ...
+        """Return locks required by this task.
+
+        Default: a RateLimiter and ConcurrencyLimiter (both disabled since
+        limit=None), so configuration can enable them without code changes.
+        """
+        return [
+            RateLimiter(LockedObjectType(TASK), self.__class__.__name__),
+            ConcurrencyLimiter(LockedObjectType(TASK), self.__class__.__name__),
+        ]
 
     @abstractmethod
     async def execute(self, **kwargs: Any) -> Any:
@@ -98,6 +104,8 @@ class PeriodicBaseTask(BaseTask):
 
     @property
     def execution_locks(self) -> list[BaseLock]:
+        # Intentionally does NOT call super() — periodic tasks use a mutex
+        # instead of the default rate/concurrency limiters.
         return [
             MutexLock(LockedObjectType(TASK), self.__class__.__name__),
         ]

@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import os
+import signal
 import sys
 import traceback
 from enum import StrEnum
@@ -140,10 +141,10 @@ async def start_worker(
     )
 
     finish_event = asyncio.Event()
-    try:
-        await worker.listen(finish_event)
-    except KeyboardInterrupt:
-        finish_event.set()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, finish_event.set)
+    await worker.listen(finish_event)
 
 
 async def start_scheduler(redis_url: str) -> None:
@@ -163,10 +164,11 @@ async def start_scheduler(redis_url: str) -> None:
 
     await scheduler.startup()
     finish_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, finish_event.set)
     try:
         await scheduler.run_forever(finish_event)
-    except KeyboardInterrupt:
-        finish_event.set()
     finally:
         await scheduler.shutdown()
 

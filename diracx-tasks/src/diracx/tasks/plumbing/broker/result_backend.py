@@ -9,6 +9,8 @@ from ..exceptions import ResultIsMissingError
 from ._types import _BlockingConnectionPool
 from .models import TaskResult
 
+DEFAULT_RESULT_TTL = 86400  # 24 hours
+
 
 class RedisResultBackend:
     """Result backend storing results in Redis with msgpack serialization."""
@@ -27,7 +29,7 @@ class RedisResultBackend:
             **connection_kwargs,  # type: ignore[arg-type]
         )
         self.prefix = prefix
-        self.result_ttl_seconds = result_ttl_seconds
+        self.result_ttl_seconds = result_ttl_seconds or DEFAULT_RESULT_TTL
 
     def _task_key(self, task_id: str) -> str:
         return f"{self.prefix}:{task_id}"
@@ -41,17 +43,11 @@ class RedisResultBackend:
     async def set_result(self, task_id: str, result: TaskResult) -> None:
         async with Redis(connection_pool=self.redis_pool) as redis:
             serialized = msgpack.packb(result.model_dump(), datetime=True)
-            if self.result_ttl_seconds:
-                await redis.setex(
-                    name=self._task_key(task_id),
-                    time=self.result_ttl_seconds,
-                    value=serialized,
-                )
-            else:
-                await redis.set(
-                    name=self._task_key(task_id),
-                    value=serialized,
-                )
+            await redis.setex(
+                name=self._task_key(task_id),
+                time=self.result_ttl_seconds,
+                value=serialized,
+            )
 
     async def is_result_ready(self, task_id: str) -> bool:
         async with Redis(connection_pool=self.redis_pool) as redis:
@@ -59,7 +55,7 @@ class RedisResultBackend:
 
     async def get_result(self, task_id: str) -> TaskResult:
         async with Redis(connection_pool=self.redis_pool) as redis:
-            result_bytes = await redis.getdel(name=self._task_key(task_id))
+            result_bytes = await redis.get(name=self._task_key(task_id))
 
         if result_bytes is None:
             raise ResultIsMissingError(
