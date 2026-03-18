@@ -17,6 +17,7 @@ from ..broker.base import AsyncBroker
 from ..broker.models import AckableMessage, BrokerMessage, TaskMessage, TaskResult
 from ..callbacks import fire_callback, on_child_complete
 from ..exceptions import UnableToAcquireLockError
+from ..persistence.dlq import TaskDB
 from ..scheduler.scheduler import DELAYED_ZSET_KEY
 from .di_resolver import solve_task_dependencies
 
@@ -81,10 +82,12 @@ class Worker:
         task_class_registry: dict[str, type[BaseTask]],
         max_concurrent_tasks: int = 10,
         max_prefetch: int = 0,
+        task_db: TaskDB | None = None,
     ) -> None:
         self.broker = broker
         self.task_registry = task_registry
         self.task_class_registry = task_class_registry
+        self.task_db = task_db
 
         self.sem: asyncio.Semaphore | None = None
         if max_concurrent_tasks > 0:
@@ -341,17 +344,42 @@ class Worker:
         task_cls: type[BaseTask],
         error_msg: str,
     ) -> None:
-        """Persist a permanently failed task to the Dead Letter Queue.
+        """Persist a permanently failed task to the Dead Letter Queue."""
+        if self.task_db is None:
+            logger.warning(
+                "Task %s (ID: %s) exhausted retries, DLQ-eligible but no TaskDB "
+                "configured. Error: %s",
+                task_message.task_name,
+                task_message.task_id,
+                error_msg,
+            )
+            return
 
-        Full DLQ persistence requires the TaskDB dependency to be injected
-        into the worker. For now, log the intent.
-        """
-        logger.warning(
-            "Task %s (ID: %s) exhausted retries, DLQ-eligible. Error: %s",
-            task_message.task_name,
-            task_message.task_id,
-            error_msg,
+        task_args = msgpack.packb(
+            {
+                "task_args": task_message.task_args,
+                "task_kwargs": task_message.task_kwargs,
+                "labels": task_message.labels,
+            },
+            datetime=True,
         )
+        max_retries = getattr(task_cls.retry_policy, "max_retries", 0)
+
+        try:
+            dlq_id = await self.task_db.insert_dlq_task(
+                task_class=task_message.task_name,
+                task_args=task_args,
+                max_retries=max_retries,
+            )
+            logger.info(
+                "Task %s (ID: %s) persisted to DLQ (dlq_id=%d). Error: %s",
+                task_message.task_name,
+                task_message.task_id,
+                dlq_id,
+                error_msg,
+            )
+        except Exception:
+            logger.exception("Failed to persist task %s to DLQ", task_message.task_name)
 
     async def _handle_success(
         self,

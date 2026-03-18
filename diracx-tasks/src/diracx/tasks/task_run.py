@@ -179,10 +179,11 @@ async def call_task(
 ) -> None:
     """Execute a task interactively (no broker).
 
-    In interactive mode, limiters (rate/concurrency) are skipped
-    and locks are skipped if no Redis connection is available.
+    Uses ``task_wrapper`` with ``_interactive=True`` so that structural
+    locks (Mutex, RW) are acquired when Redis is available, while
+    limiters (rate/concurrency) are skipped.
     """
-    from .plumbing.factory import load_task_registry
+    from .plumbing.factory import load_task_registry, task_wrapper
 
     registry = load_task_registry()
 
@@ -191,12 +192,20 @@ async def call_task(
         print(f"Task {entry_point!r} not found. Available: {sorted(registry)}")
         sys.exit(1)
 
-    task = task_cls(*args)
+    # Try to connect to Redis for lock acquisition
+    redis = None
+    redis_url = os.environ.get(REDIS_URL_ENV_VAR)
+    if redis_url:
+        from redis.asyncio import Redis
+
+        redis = Redis.from_url(redis_url)
 
     if debugger == DebugOptions.BEFORE:
         breakpoint()  # noqa: T100
     try:
-        result = await task.execute(**kwargs)
+        result = await task_wrapper(
+            task_cls, *args, _redis=redis, _interactive=True, **kwargs
+        )
         print(f"Result: {result}")
     except Exception:
         if debugger != DebugOptions.ON_ERROR:
@@ -206,3 +215,6 @@ async def call_task(
         traceback_info = sys.exc_info()
         traceback.print_exception(*traceback_info)
         pdb.post_mortem(traceback_info[2])
+    finally:
+        if redis is not None:
+            await redis.aclose()

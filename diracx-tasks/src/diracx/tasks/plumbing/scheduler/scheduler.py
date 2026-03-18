@@ -6,8 +6,10 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import msgpack
+from opentelemetry import metrics
 from redis.asyncio import BlockingConnectionPool, Redis
 
 from ..base_task import BaseTask, PeriodicBaseTask, PeriodicVoAwareBaseTask
@@ -19,6 +21,10 @@ if TYPE_CHECKING:
     from diracx.core.config import Config
 
 logger = logging.getLogger(__name__)
+_meter = metrics.get_meter(__name__)
+
+SCHEDULER_LOCK_KEY = "diracx:scheduler:lock"
+SCHEDULER_LOCK_TTL_SECONDS = 30
 
 # Lua script for atomic delayed-task promotion.
 # For each due member: remove from ZSET, deserialize with cmsgpack to
@@ -67,6 +73,7 @@ class TaskScheduler:
         prefix: str = "diracx:scheduler",
         check_interval: float = 10.0,
         delayed_poll_interval: float = 1.0,
+        config_watch_interval: float = 60.0,
         max_connection_pool_size: int | None = None,
         **connection_kwargs: Any,
     ) -> None:
@@ -74,8 +81,10 @@ class TaskScheduler:
         self.prefix = prefix
         self.check_interval = check_interval
         self.delayed_poll_interval = delayed_poll_interval
+        self.config_watch_interval = config_watch_interval
         self.task_registry = task_registry or {}
         self._config = config
+        self._instance_id = uuid4().hex
         self.connection_pool: _BlockingConnectionPool = BlockingConnectionPool.from_url(
             url=redis_url,
             max_connections=max_connection_pool_size,
@@ -83,6 +92,13 @@ class TaskScheduler:
         )
         # Mapping of (task_class_name, vo_or_empty) -> next_scheduled_time
         self._next_runs: dict[tuple[str, str], datetime] = {}
+        # Cached ZSET size for OTel observable gauge
+        self._delayed_zset_size: int = 0
+        _meter.create_observable_gauge(
+            "delayed_tasks_pending",
+            callbacks=[self._observe_delayed_count],
+            description="Number of tasks waiting in the delayed ZSET",
+        )
 
     async def startup(self) -> None:
         await self.broker.startup()
@@ -94,13 +110,41 @@ class TaskScheduler:
         logger.info("Scheduler shut down")
 
     async def run_forever(self, finish_event: asyncio.Event | None = None) -> None:
-        """Run both the periodic scheduler and the delayed-ZSET poller concurrently."""
+        """Run the scheduler loops concurrently.
+
+        Acquires a Redis mutex as defense-in-depth (on top of k8s
+        StatefulSet ensuring a single replica).  If the lock cannot
+        be acquired, waits and retries.
+        """
         _finish = finish_event or asyncio.Event()
+
+        # Defense-in-depth: acquire scheduler singleton lock
+        while not _finish.is_set():
+            if await self._acquire_scheduler_lock():
+                break
+            logger.warning(
+                "Another scheduler holds the lock, retrying in %ds",
+                SCHEDULER_LOCK_TTL_SECONDS,
+            )
+            try:
+                await asyncio.wait_for(
+                    _finish.wait(), timeout=SCHEDULER_LOCK_TTL_SECONDS
+                )
+                return  # finish_event was set while waiting
+            except asyncio.TimeoutError:
+                pass
+
+        logger.info("Acquired scheduler lock (instance=%s)", self._instance_id)
 
         periodic_task = asyncio.create_task(self._periodic_loop(_finish))
         delayed_task = asyncio.create_task(self._delayed_poll_loop(_finish))
+        lock_task = asyncio.create_task(self._lock_extend_loop(_finish))
+        config_task = asyncio.create_task(self._config_watch_loop(_finish))
 
-        await asyncio.gather(periodic_task, delayed_task)
+        try:
+            await asyncio.gather(periodic_task, delayed_task, lock_task, config_task)
+        finally:
+            await self._release_scheduler_lock()
 
     async def _periodic_loop(self, finish_event: asyncio.Event) -> None:
         """Check periodic tasks and submit them when due."""
@@ -154,6 +198,8 @@ class TaskScheduler:
                     )
                     if promoted:
                         logger.debug("Promoted %d delayed tasks to streams", promoted)
+
+                    self._delayed_zset_size = await redis.zcard(DELAYED_ZSET_KEY)
                 except Exception:
                     logger.exception("Error in delayed poll loop")
 
@@ -237,6 +283,112 @@ class TaskScheduler:
 
     def _find_task_class(self, task_name: str) -> type[BaseTask] | None:
         return self.task_registry.get(task_name)
+
+    # ------------------------------------------------------------------
+    # Redis singleton mutex (defense-in-depth)
+    # ------------------------------------------------------------------
+
+    async def _acquire_scheduler_lock(self) -> bool:
+        """Try to acquire the scheduler singleton lock via SET NX."""
+        async with Redis(connection_pool=self.connection_pool) as redis:
+            return bool(
+                await redis.set(
+                    SCHEDULER_LOCK_KEY,
+                    self._instance_id,
+                    nx=True,
+                    ex=SCHEDULER_LOCK_TTL_SECONDS,
+                )
+            )
+
+    async def _release_scheduler_lock(self) -> None:
+        """Release the lock only if we still own it."""
+        async with Redis(connection_pool=self.connection_pool) as redis:
+            current = await redis.get(SCHEDULER_LOCK_KEY)
+            if current == self._instance_id.encode():
+                await redis.delete(SCHEDULER_LOCK_KEY)
+
+    async def _lock_extend_loop(self, finish_event: asyncio.Event) -> None:
+        """Periodically extend the scheduler lock TTL."""
+        interval = SCHEDULER_LOCK_TTL_SECONDS / 3
+        async with Redis(connection_pool=self.connection_pool) as redis:
+            while not finish_event.is_set():
+                try:
+                    current = await redis.get(SCHEDULER_LOCK_KEY)
+                    if current == self._instance_id.encode():
+                        await redis.expire(
+                            SCHEDULER_LOCK_KEY, SCHEDULER_LOCK_TTL_SECONDS
+                        )
+                    else:
+                        logger.error("Lost scheduler lock, shutting down")
+                        finish_event.set()
+                        return
+                except Exception:
+                    logger.exception("Error extending scheduler lock")
+
+                try:
+                    await asyncio.wait_for(finish_event.wait(), timeout=interval)
+                    break
+                except asyncio.TimeoutError:
+                    pass
+
+    # ------------------------------------------------------------------
+    # Config watch
+    # ------------------------------------------------------------------
+
+    async def _config_watch_loop(self, finish_event: asyncio.Event) -> None:
+        """Periodically check for config changes and reconcile schedules.
+
+        Detects added/removed VOs and updates ``_next_runs`` for
+        VO-aware periodic tasks accordingly.
+        """
+        known_vos: set[str] = set(self.load_vos())
+
+        while not finish_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    finish_event.wait(), timeout=self.config_watch_interval
+                )
+                break
+            except asyncio.TimeoutError:
+                pass
+
+            current_vos = set(self.load_vos())
+            if current_vos == known_vos:
+                continue
+
+            added = current_vos - known_vos
+            removed = known_vos - current_vos
+            known_vos = current_vos
+
+            if added:
+                logger.info("New VOs detected: %s", added)
+            if removed:
+                logger.info("Removed VOs detected: %s", removed)
+
+            # Add schedules for new VOs
+            for task_name, task_cls in self.task_registry.items():
+                if not issubclass(task_cls, PeriodicVoAwareBaseTask):
+                    continue
+                if not getattr(task_cls, "_enabled", True):
+                    continue
+                for vo in added:
+                    self.add_vo_schedule(
+                        task_name, vo, task_cls.default_schedule.next_occurrence()
+                    )
+
+            # Remove schedules for removed VOs
+            for key in list(self._next_runs):
+                if key[1] in removed:
+                    del self._next_runs[key]
+
+    # ------------------------------------------------------------------
+    # OTel observable gauge callback
+    # ------------------------------------------------------------------
+
+    def _observe_delayed_count(
+        self, options: metrics.CallbackOptions
+    ) -> list[metrics.Observation]:
+        return [metrics.Observation(self._delayed_zset_size)]
 
     @staticmethod
     async def schedule_delayed(

@@ -57,8 +57,11 @@ async def spawn_with_callback(
     pipe.set(f"{_group_key(group_id)}:remaining", len(children), ex=ttl_seconds)
     await pipe.execute()
 
-    # Schedule each child concurrently
-    await asyncio.gather(*(child.schedule() for child in children))
+    # Schedule each child with the group_id label so the worker can
+    # detect them as belonging to this callback group on completion.
+    await asyncio.gather(
+        *(child.schedule(labels={"group_id": group_id}) for child in children)
+    )
 
     logger.info(
         "Spawned %d children with callback (group_id=%s)", len(children), group_id

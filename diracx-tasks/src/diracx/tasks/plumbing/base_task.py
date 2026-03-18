@@ -60,19 +60,30 @@ class BaseTask(ABC):
             return dataclasses.astuple(self)
         return ()
 
-    async def schedule(self, *, at_time: datetime | None = None) -> AsyncTask:
+    async def schedule(
+        self,
+        *,
+        at_time: datetime | None = None,
+        labels: dict[str, Any] | None = None,
+    ) -> AsyncTask:
         """Schedule the task for execution via the broker.
 
         When ``at_time`` is provided, the task is added to the delayed
         ZSET and will be promoted to a stream when the time arrives.
+
+        Extra ``labels`` are merged into the broker message (e.g. for
+        callback group membership).
         """
         registry = self._broker_registry.get()
         if registry is None:
             raise RuntimeError("Task is not bound to a broker")
         broker_task = registry[self.__class__]
+        kicker = broker_task.kicker()
+        if labels:
+            kicker.labels.update(labels)
         if at_time is not None:
-            return await broker_task.kicker().kiq_delayed(at_time, *self.serialize())
-        return await broker_task.kiq(*self.serialize())
+            return await kicker.kiq_delayed(at_time, *self.serialize())
+        return await kicker.kiq(*self.serialize())
 
 
 class PeriodicBaseTask(BaseTask):
