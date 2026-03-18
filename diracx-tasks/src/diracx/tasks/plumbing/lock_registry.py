@@ -36,9 +36,9 @@ def validate_registry() -> None:
 
     Called at startup to catch misconfigurations early.
     """
-    from importlib.metadata import entry_points
+    from diracx.core.extensions import DiracEntryPoint, select_from_extension
 
-    for ep in entry_points(group="diracx.lock_object_types"):
+    for ep in select_from_extension(group=DiracEntryPoint.LOCK_OBJECT_TYPES):
         ep.load()  # Side-effect: calls register_locked_object_type
 
 

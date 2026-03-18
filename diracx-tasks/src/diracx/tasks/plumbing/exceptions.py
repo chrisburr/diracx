@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 __all__ = [
-    "UnableToAcquireLock",
-    "StopRetryingException",
-    "TooManyRetries",
+    "UnableToAcquireLockError",
+    "StopRetryingError",
+    "TooManyRetriesError",
     "UnretryableError",
-    "TaskRetryRequested",
+    "TaskRetryRequestedError",
     "SendTaskError",
     "ResultIsMissingError",
     "ResultIsReadyError",
@@ -14,23 +14,23 @@ __all__ = [
 ]
 
 
-class UnableToAcquireLock(Exception):
+class UnableToAcquireLockError(Exception):
     """Lock acquisition failed."""
 
 
-class StopRetryingException(Exception):
+class StopRetryingError(Exception):
     """Base exception to indicate that retries should stop."""
 
 
-class TooManyRetries(StopRetryingException):
+class TooManyRetriesError(StopRetryingError):
     """Task has exceeded its retry limit."""
 
 
-class UnretryableError(StopRetryingException):
+class UnretryableError(StopRetryingError):
     """Task should not be retried."""
 
 
-class TaskRetryRequested(Exception):
+class TaskRetryRequestedError(Exception):
     """Raised by tasks that want to explicitly request a retry."""
 
 

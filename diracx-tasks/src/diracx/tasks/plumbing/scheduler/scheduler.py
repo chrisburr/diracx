@@ -8,26 +8,34 @@ from datetime import UTC, datetime
 from typing import Any
 
 import msgpack
-from redis.asyncio import BlockingConnectionPool, Connection, Redis
+from redis.asyncio import BlockingConnectionPool, Redis
 
 from ..base_task import BaseTask, PeriodicBaseTask, PeriodicVoAwareBaseTask
+from ..broker._types import _BlockingConnectionPool
 from ..broker.base import AsyncBroker
 from ..broker.models import AsyncKicker, BrokerMessage
 
 logger = logging.getLogger(__name__)
 
-# Lua script for atomic delayed-task promotion:
-# If the member still exists in the ZSET, remove it and return the data.
-# This prevents double-scheduling if multiple scheduler instances race.
+# Lua script for atomic delayed-task promotion.
+# For each due member: remove from ZSET, deserialize with cmsgpack to
+# extract priority+size labels, and XADD directly to the target stream.
+# Everything happens in a single atomic Lua call — no window where a
+# crash could lose tasks between ZSET removal and stream insertion.
 _PROMOTE_DELAYED_SCRIPT = """
-local members = redis.call("zrangebyscore", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, ARGV[2])
-if #members == 0 then
-    return {}
-end
+local members = redis.call("zrangebyscore", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, tonumber(ARGV[2]))
+local promoted = 0
 for i, member in ipairs(members) do
     redis.call("zrem", KEYS[1], member)
+    local msg = cmsgpack.unpack(member)
+    local labels = msg["labels"] or {}
+    local priority = labels["priority"] or "normal"
+    local size = labels["size"] or "medium"
+    local stream = "diracx:tasks:" .. priority .. ":" .. size
+    redis.call("xadd", stream, "*", "data", member)
+    promoted = promoted + 1
 end
-return members
+return promoted
 """
 
 DELAYED_ZSET_KEY = "diracx:tasks:delayed"
@@ -63,12 +71,10 @@ class TaskScheduler:
         self.check_interval = check_interval
         self.delayed_poll_interval = delayed_poll_interval
         self.task_registry = task_registry or {}
-        self.connection_pool: BlockingConnectionPool[Connection] = (  # type: ignore[type-arg]
-            BlockingConnectionPool.from_url(
-                url=redis_url,
-                max_connections=max_connection_pool_size,
-                **connection_kwargs,
-            )
+        self.connection_pool: _BlockingConnectionPool = BlockingConnectionPool.from_url(
+            url=redis_url,
+            max_connections=max_connection_pool_size,
+            **connection_kwargs,
         )
         # Mapping of (task_class_name, vo_or_empty) -> next_scheduled_time
         self._next_runs: dict[tuple[str, str], datetime] = {}
@@ -83,11 +89,7 @@ class TaskScheduler:
         logger.info("Scheduler shut down")
 
     async def run_forever(self, finish_event: asyncio.Event | None = None) -> None:
-        """Main scheduler loop.
-
-        Runs both the periodic scheduler and the delayed-ZSET poller
-        concurrently.
-        """
+        """Run both the periodic scheduler and the delayed-ZSET poller concurrently."""
         _finish = finish_event or asyncio.Event()
 
         periodic_task = asyncio.create_task(self._periodic_loop(_finish))
@@ -103,15 +105,22 @@ class TaskScheduler:
         while not finish_event.is_set():
             now = datetime.now(tz=UTC)
 
+            coros = []
+            due_keys = []
             for (task_name, vo), next_run in list(self._next_runs.items()):
                 if now >= next_run:
-                    await self._submit_periodic_task(task_name, vo)
-                    # Compute the next occurrence
-                    task_cls = self._find_task_class(task_name)
-                    if task_cls and hasattr(task_cls, "default_schedule"):
-                        self._next_runs[(task_name, vo)] = (
-                            task_cls.default_schedule.next_occurrence()
-                        )
+                    coros.append(self._submit_periodic_task(task_name, vo))
+                    due_keys.append((task_name, vo))
+
+            if coros:
+                await asyncio.gather(*coros)
+
+            for task_name, vo in due_keys:
+                task_cls = self._find_task_class(task_name)
+                if task_cls and hasattr(task_cls, "default_schedule"):
+                    self._next_runs[(task_name, vo)] = (
+                        task_cls.default_schedule.next_occurrence()
+                    )
 
             try:
                 await asyncio.wait_for(finish_event.wait(), timeout=self.check_interval)
@@ -120,27 +129,26 @@ class TaskScheduler:
                 pass
 
     async def _delayed_poll_loop(self, finish_event: asyncio.Event) -> None:
-        """Poll the delayed ZSET and promote due tasks to streams."""
+        """Poll the delayed ZSET and promote due tasks to streams.
+
+        Promotion is fully atomic inside a Lua script: for each due
+        member the script removes it from the ZSET, deserialises it
+        with cmsgpack to read the target stream, and XADDs it — all
+        in one call.  No tasks can be lost to a crash mid-promotion.
+        """
         async with Redis(connection_pool=self.connection_pool) as redis:
             while not finish_event.is_set():
                 try:
                     now_ts = datetime.now(tz=UTC).timestamp()
-                    members = await redis.eval(  # type: ignore[arg-type]
+                    promoted = await redis.eval(  # type: ignore[arg-type]
                         _PROMOTE_DELAYED_SCRIPT,
                         1,
                         DELAYED_ZSET_KEY,
                         str(now_ts),
                         "100",
                     )
-                    for member_data in members or []:
-                        broker_msg = BrokerMessage.model_validate(
-                            msgpack.unpackb(member_data, timestamp=3)
-                        )
-                        await self.broker.kick(broker_msg)
-                        logger.debug(
-                            "Promoted delayed task %s to stream",
-                            broker_msg.task_name,
-                        )
+                    if promoted:
+                        logger.debug("Promoted %d delayed tasks to streams", promoted)
                 except Exception:
                     logger.exception("Error in delayed poll loop")
 
@@ -177,8 +185,8 @@ class TaskScheduler:
             return
 
         labels: dict[str, Any] = {
-            "priority": str(task_cls.priority),
-            "size": str(task_cls.size),
+            "priority": task_cls.priority,
+            "size": task_cls.size,
             "periodic": True,
         }
         args: list[Any] = []
@@ -188,7 +196,7 @@ class TaskScheduler:
             # VO is the first constructor argument for VO-aware tasks
             args.append(vo)
 
-        kicker = AsyncKicker(
+        kicker: AsyncKicker = AsyncKicker(
             task_name=task_name,
             broker=self.broker,
             labels=labels,

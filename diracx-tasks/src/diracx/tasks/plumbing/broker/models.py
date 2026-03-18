@@ -42,8 +42,8 @@ class TaskMessage(BaseModel):
     task_id: str
     task_name: str
     labels: dict[str, Any]
-    args: list[Any]
-    kwargs: dict[str, Any]
+    task_args: list[Any]
+    task_kwargs: dict[str, Any]
 
 
 class BrokerMessage(BaseModel):
@@ -93,9 +93,9 @@ class TaskResult(BaseModel, Generic[_ReturnType]):
         execution_time: float,
         labels: dict[str, Any] | None = None,
     ) -> TaskResult[None]:
-        return cls(
+        return TaskResult[None](
             is_err=True,
-            return_value=None,  # type: ignore[arg-type]
+            return_value=None,
             execution_time=execution_time,
             error={
                 "type": type(exc).__name__,
@@ -197,8 +197,8 @@ class AsyncKicker(Generic[_ReturnType]):
             task_id=task_id,
             task_name=self.task_name,
             labels=self.labels.copy(),
-            args=formatted_args,
-            kwargs=formatted_kwargs,
+            task_args=formatted_args,
+            task_kwargs=formatted_kwargs,
         )
 
 
@@ -270,9 +270,14 @@ class AsyncTask(Generic[_ReturnType]):
         check_interval: float = 0.2,
         timeout: float = -1.0,
     ) -> TaskResult[_ReturnType]:
+        if self.result_backend is None:
+            raise ResultGetError("No result backend configured")
         start_time = time()
-        while not await self.is_ready():
-            await asyncio.sleep(check_interval)
+        while True:
+            try:
+                return await self.result_backend.get_result(self.task_id)
+            except ResultGetError:
+                pass  # Result not ready yet
             if 0 < timeout < time() - start_time:
                 raise TaskResultTimeoutError(timeout=timeout)
-        return await self.get_result()
+            await asyncio.sleep(check_interval)

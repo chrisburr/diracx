@@ -2,27 +2,20 @@ from __future__ import annotations
 
 __all__ = ["RedisStreamBroker"]
 
+import functools
 import logging
+import time
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Awaitable, Callable, Optional
+from typing import Any, AsyncGenerator, Awaitable, Callable
 
 import msgpack
-from redis.asyncio import BlockingConnectionPool, Connection, Redis, ResponseError
+from redis.asyncio import BlockingConnectionPool, Redis, ResponseError
 
 from ..enums import Priority, Size
+from ._types import _BlockingConnectionPool
 from .base import AsyncBroker
 from .models import AckableMessage, BrokerMessage
 from .result_backend import AsyncResultBackend
-
-if TYPE_CHECKING:
-    from typing import TypeAlias, TypeVar
-
-    _T = TypeVar("_T")
-    _BlockingConnectionPool: TypeAlias = BlockingConnectionPool[Connection]  # type: ignore[type-arg]
-else:
-    from typing import TypeAlias
-
-    _BlockingConnectionPool: TypeAlias = BlockingConnectionPool
 
 logger = logging.getLogger(__name__)
 
@@ -48,17 +41,17 @@ class RedisStreamBroker(AsyncBroker):
         *,
         worker_size: Size = Size.MEDIUM,
         consumer_group_name: str = "diracx:tasks:workers",
-        consumer_name: Optional[str] = None,
+        consumer_name: str | None = None,
         mkstream: bool = True,
         xread_block: int = 2000,
         xread_count: int = 10,
-        maxlen: Optional[int] = None,
+        maxlen: int | None = None,
         approximate: bool = True,
         idle_timeout: int = 600000,
         unacknowledged_batch_size: int = 100,
         max_connection_pool_size: int | None = None,
-        result_backend: Optional[AsyncResultBackend[Any]] = None,
-        task_id_generator: Optional[Callable[[], str]] = None,
+        result_backend: AsyncResultBackend[Any] | None = None,
+        task_id_generator: Callable[[], str] | None = None,
         **connection_kwargs: Any,
     ) -> None:
         super().__init__(
@@ -81,7 +74,7 @@ class RedisStreamBroker(AsyncBroker):
         self.idle_timeout = idle_timeout
         self.unacknowledged_batch_size = unacknowledged_batch_size
 
-    @property
+    @functools.cached_property
     def _listen_streams(self) -> list[str]:
         """Streams this worker listens to, in strict priority order."""
         return [
@@ -146,6 +139,7 @@ class RedisStreamBroker(AsyncBroker):
         """
         async with Redis(connection_pool=self.connection_pool) as redis:
             streams = {s: ">" for s in self._listen_streams}
+            last_autoclaim = 0.0
 
             while True:
                 # Read from streams in priority order
@@ -165,7 +159,11 @@ class RedisStreamBroker(AsyncBroker):
                             ack=self._ack_generator(msg_id=msg_id, queue_name=stream),
                         )
 
-                # Reclaim unacknowledged messages
+                # Reclaim unacknowledged messages (throttled to idle_timeout interval)
+                now = time.monotonic()
+                if now - last_autoclaim < self.idle_timeout / 1000:
+                    continue
+                last_autoclaim = now
                 for sname in self._listen_streams:
                     lock = redis.lock(
                         f"autoclaim:{self.consumer_group_name}:{sname}",

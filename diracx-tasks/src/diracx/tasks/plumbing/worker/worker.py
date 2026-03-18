@@ -20,11 +20,29 @@ QUEUE_DONE = b"-1"
 
 
 class Worker:
-    """Worker that listens for tasks from broker and executes them.
+    """Execute tasks consumed from a broker.
 
-    Architecture:
-      - prefetcher: async loop reading from broker, puts messages in queue
-      - runner: async loop executing tasks with concurrency control
+    The worker uses a two-loop architecture:
+
+    **prefetcher** — reads messages from the broker (Redis streams) and
+    places them into an internal ``asyncio.Queue``.  When ``max_prefetch``
+    is set, a semaphore limits how far ahead the prefetcher can read,
+    providing backpressure so we don't buffer unbounded messages in memory.
+
+    **runner** — pulls messages from the queue, resolves FastAPI-style
+    dependencies via ``solve_task_dependencies``, executes the task
+    function, persists the result to the result backend, and finally
+    acknowledges the message.  ``max_concurrent_tasks`` controls how
+    many tasks execute in parallel (also semaphore-gated).
+
+    Flow::
+
+        Broker  ──▸  prefetcher  ──▸  queue  ──▸  runner  ──▸  task_func
+                     (sem_prefetch)               (sem)
+
+    Shutdown is cooperative: setting ``finish_event`` causes the
+    prefetcher to drain, send ``QUEUE_DONE`` to the runner, and the
+    runner waits for in-flight tasks before exiting.
     """
 
     def __init__(
@@ -33,19 +51,17 @@ class Worker:
         task_registry: dict[str, Callable[..., Any]],
         max_concurrent_tasks: int = 10,
         max_prefetch: int = 0,
-        ack_when: str = "saved",
     ) -> None:
         self.broker = broker
         self.task_registry = task_registry
-        self.ack_when = ack_when
 
         self.sem: asyncio.Semaphore | None = None
         if max_concurrent_tasks > 0:
             self.sem = asyncio.Semaphore(max_concurrent_tasks)
 
-        self.sem_prefetch = asyncio.Semaphore(
-            max_prefetch if max_prefetch > 0 else 999999
-        )
+        self.sem_prefetch: asyncio.Semaphore | None = None
+        if max_prefetch > 0:
+            self.sem_prefetch = asyncio.Semaphore(max_prefetch)
 
     async def listen(self, finish_event: asyncio.Event) -> None:
         """Start the prefetcher and runner tasks."""
@@ -67,8 +83,15 @@ class Worker:
         queue: asyncio.Queue[bytes | AckableMessage],
         finish_event: asyncio.Event,
     ) -> None:
-        """Prefetch messages from broker and put them in queue."""
+        """Prefetch messages from broker into the internal queue.
+
+        This is a backpressure-controlled pump between the broker
+        (Redis streams) and the runner.  We wrap broker.__anext__()
+        in a task so we can poll it with a timeout — otherwise we'd
+        block forever and never notice finish_event.
+        """
         iterator = self.broker.listen()
+        # Kick off the first read from the broker as a background task
         current_message_task = asyncio.create_task(iterator.__anext__())  # type: ignore[arg-type]
 
         while True:
@@ -76,14 +99,25 @@ class Worker:
                 break
 
             try:
-                await self.sem_prefetch.acquire()
+                # Block until the runner has capacity for another message.
+                # The runner releases this semaphore when it picks a message
+                # off the queue, so this is how we apply backpressure — if
+                # the runner is saturated we stop pulling from Redis.
+                if self.sem_prefetch is not None:
+                    await self.sem_prefetch.acquire()
 
+                # Poll the in-flight Redis read with a short timeout so we
+                # can loop back and re-check finish_event if nothing arrived.
                 done, _ = await asyncio.wait({current_message_task}, timeout=0.3)
 
                 if not done:
-                    self.sem_prefetch.release()
+                    # No message yet — give back the slot and try again
+                    if self.sem_prefetch is not None:
+                        self.sem_prefetch.release()
                     continue
 
+                # A message arrived — grab it and immediately start the
+                # next read so Redis I/O overlaps with queue insertion.
                 message = current_message_task.result()
                 current_message_task = asyncio.create_task(iterator.__anext__())  # type: ignore[arg-type]
 
@@ -92,16 +126,26 @@ class Worker:
             except (asyncio.CancelledError, StopAsyncIteration):
                 break
 
+        # Shutting down: cancel outstanding read, tell the runner we're
+        # done, and release the semaphore so the runner isn't stuck.
         logger.info("Prefetcher stopping")
         current_message_task.cancel()
         await queue.put(QUEUE_DONE)  # type: ignore[arg-type]
-        self.sem_prefetch.release()
+        if self.sem_prefetch is not None:
+            self.sem_prefetch.release()
 
     async def runner(
         self,
         queue: asyncio.Queue[bytes | AckableMessage],
     ) -> None:
-        """Run tasks from the queue."""
+        """Pull messages from the queue and execute them concurrently.
+
+        Each message is dispatched to ``process_message`` in its own
+        ``asyncio.Task``.  The concurrency semaphore (``self.sem``)
+        limits how many tasks run at once; the prefetch semaphore
+        (``self.sem_prefetch``) is released here to signal the
+        prefetcher that another slot is available.
+        """
         tasks: set[asyncio.Task[Any]] = set()
 
         def task_done_callback(task: asyncio.Task[Any]) -> None:
@@ -114,7 +158,8 @@ class Worker:
                 if self.sem is not None:
                     await self.sem.acquire()
 
-                self.sem_prefetch.release()
+                if self.sem_prefetch is not None:
+                    self.sem_prefetch.release()
 
                 message = await queue.get()
 
@@ -124,7 +169,7 @@ class Worker:
                         await asyncio.wait(tasks)
                     break
 
-                task = asyncio.create_task(self.callback(message))
+                task = asyncio.create_task(self.process_message(message))
                 tasks.add(task)
                 task.add_done_callback(task_done_callback)
 
@@ -133,8 +178,8 @@ class Worker:
 
         logger.info("Runner stopped")
 
-    async def callback(self, message: bytes | AckableMessage) -> None:
-        """Process a single message from the broker."""
+    async def process_message(self, message: bytes | AckableMessage) -> None:
+        """Deserialize, look up, execute, and ack a single broker message."""
         message_data = message.data if isinstance(message, AckableMessage) else message
 
         try:
@@ -154,13 +199,7 @@ class Worker:
             "Executing task %s (ID: %s)", task_message.task_name, task_message.task_id
         )
 
-        if self.ack_when == "received" and isinstance(message, AckableMessage):
-            await message.ack()
-
         result = await self.run_task(task_func, task_message)
-
-        if self.ack_when == "executed" and isinstance(message, AckableMessage):
-            await message.ack()
 
         try:
             if self.broker.result_backend:
@@ -170,7 +209,7 @@ class Worker:
         except Exception:
             logger.exception("Failed to save result")
 
-        if self.ack_when == "saved" and isinstance(message, AckableMessage):
+        if isinstance(message, AckableMessage):
             await message.ack()
 
     async def run_task(
@@ -178,7 +217,14 @@ class Worker:
         task_func: Callable[..., Any],
         task_message: TaskMessage,
     ) -> TaskResult[Any]:
-        """Execute a task function with dependency resolution."""
+        """Execute a task function with dependency resolution.
+
+        Resolves FastAPI-style dependencies (declared via ``Depends``)
+        through ``solve_task_dependencies``, merges them with the
+        kwargs from the message, and calls the task.  Returns a
+        ``TaskResult`` wrapping either the return value or the
+        exception.
+        """
         start_time = time()
         returned = None
         found_exception: BaseException | None = None
@@ -194,12 +240,9 @@ class Worker:
                     dependency_context=self.broker.custom_dependency_context,
                 )
 
-            all_kwargs = {**dep_kwargs, **task_message.kwargs}
+            all_kwargs = {**dep_kwargs, **task_message.task_kwargs}
 
-            if asyncio.iscoroutinefunction(task_func):
-                returned = await task_func(*task_message.args, **all_kwargs)
-            else:
-                returned = task_func(*task_message.args, **all_kwargs)
+            returned = await task_func(*task_message.task_args, **all_kwargs)
 
             if async_exit_stack:
                 await async_exit_stack.aclose()
@@ -210,7 +253,7 @@ class Worker:
                 try:
                     await async_exit_stack.aclose()
                 except Exception:
-                    pass
+                    logger.debug("Error closing exit stack", exc_info=True)
             logger.error(
                 "Exception in task %s: %s",
                 task_message.task_name,

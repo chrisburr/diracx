@@ -54,7 +54,7 @@ DBDepends = partial(Depends, scope="function")
 
 def add_settings_annotation(cls: T) -> T:
     """Add a ``Depends`` annotation to a class that has a ``create`` classmethod."""
-    return Annotated[cls, Depends(cls.create)]  # type: ignore[return-value]
+    return Annotated[cls, Depends(cls.create)]  # type: ignore[return-value, attr-defined]
 
 
 # Databases

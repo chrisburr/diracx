@@ -3,13 +3,11 @@ from __future__ import annotations
 __all__ = ["AsyncBroker"]
 
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Callable, Optional, TypeVar
+from typing import Any, AsyncGenerator, Callable
 from uuid import uuid4
 
 from .models import AckableMessage, BrokerMessage
 from .result_backend import AsyncResultBackend
-
-_T = TypeVar("_T")
 
 
 def _default_id_generator() -> str:
@@ -21,8 +19,8 @@ class AsyncBroker(ABC):
 
     def __init__(
         self,
-        result_backend: Optional[AsyncResultBackend[_T]] = None,
-        task_id_generator: Optional[Callable[[], str]] = None,
+        result_backend: AsyncResultBackend[Any] | None = None,
+        task_id_generator: Callable[[], str] | None = None,
     ) -> None:
         self.result_backend = result_backend
         self.id_generator = task_id_generator or _default_id_generator

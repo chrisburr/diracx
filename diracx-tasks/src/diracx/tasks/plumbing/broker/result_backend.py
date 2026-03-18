@@ -3,22 +3,14 @@ from __future__ import annotations
 __all__ = ["AsyncResultBackend", "RedisResultBackend"]
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import Generic, TypeVar
 
 import msgpack
-from redis.asyncio import BlockingConnectionPool, Connection, Redis
+from redis.asyncio import BlockingConnectionPool, Redis
 
 from ..exceptions import ResultIsMissingError
+from ._types import _BlockingConnectionPool
 from .models import TaskResult
-
-if TYPE_CHECKING:
-    from typing import TypeAlias
-
-    _BlockingConnectionPool: TypeAlias = BlockingConnectionPool[Connection]  # type: ignore[type-arg]
-else:
-    from typing import TypeAlias
-
-    _BlockingConnectionPool: TypeAlias = BlockingConnectionPool
 
 _ReturnType = TypeVar("_ReturnType")
 

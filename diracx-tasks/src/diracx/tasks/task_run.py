@@ -23,7 +23,7 @@ class DebugOptions(StrEnum):
 
 
 def main() -> None:
-    """Main CLI entry point."""
+    """Parse arguments and dispatch to the appropriate subcommand."""
     parser = argparse.ArgumentParser(description="DiracX tasks CLI", allow_abbrev=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
 

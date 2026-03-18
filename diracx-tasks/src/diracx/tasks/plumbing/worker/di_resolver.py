@@ -22,11 +22,14 @@ async def solve_task_dependencies(
     Unlike FastAPI's solve_dependencies, this doesn't require Request/WebSocket
     objects since we're running in a background worker.
 
+    If the callable has a pre-computed ``_dependant`` attribute (set by
+    ``wrap_task``), it is reused to avoid repeated reflection.
+
     Returns:
         Tuple of (resolved kwargs dict, async exit stack).
 
     """
-    dependant = get_dependant(path="/", call=call)
+    dependant = getattr(call, "_dependant", None) or get_dependant(path="/", call=call)
 
     dependency_cache: dict[Any, Any] = {}
     async_exit_stack = AsyncExitStack()
@@ -34,7 +37,6 @@ async def solve_task_dependencies(
     values = await _resolve_dependant(
         dependant=dependant,
         dependency_overrides=dependency_overrides or {},
-        dependency_context=dependency_context or {},
         dependency_cache=dependency_cache,
         async_exit_stack=async_exit_stack,
     )
@@ -46,7 +48,6 @@ async def _resolve_dependant(
     *,
     dependant: Dependant,
     dependency_overrides: dict[Callable[..., Any], Callable[..., Any]],
-    dependency_context: dict[type, Any],
     dependency_cache: dict[Any, Any],
     async_exit_stack: AsyncExitStack,
 ) -> dict[str, Any]:
@@ -79,7 +80,6 @@ async def _resolve_dependant(
             sub_values = await _resolve_dependant(
                 dependant=use_sub_dependant,
                 dependency_overrides=dependency_overrides,
-                dependency_context=dependency_context,
                 dependency_cache=dependency_cache,
                 async_exit_stack=async_exit_stack,
             )

@@ -10,6 +10,8 @@ from typing import Any, Callable
 
 from fastapi.dependencies.utils import get_dependant
 
+from diracx.core.extensions import select_from_extension
+
 from .base_task import BaseTask
 from .broker.models import AsyncDecoratedTask
 
@@ -17,26 +19,27 @@ logger = logging.getLogger(__name__)
 
 
 async def task_wrapper(cls: type[BaseTask], *args: Any, **kwargs: Any) -> Any:
-    """Wrapper that instantiates a task, acquires locks, and executes it.
+    """Instantiate a task, acquire locks, and execute it.
 
     ``args`` are the task's constructor arguments (from serialization).
     ``kwargs`` are resolved DI dependencies for ``execute()``.
     """
     task = cls(*args)
     held_locks: list[Any] = []
+    # Pop redis once before the loop — otherwise only the first lock gets it
+    redis = kwargs.pop("_redis", None)
     try:
         for lock in task.execution_locks:
-            # Lock acquisition uses the redis instance from kwargs if available,
-            # otherwise locks are no-ops (for testing / CLI mode)
-            redis = kwargs.pop("_redis", None)
             acquired = await lock.acquire(redis) if redis else True
             if acquired:
                 held_locks.append((lock, redis))
             else:
                 # Reschedule with backoff
-                from .exceptions import UnableToAcquireLock
+                from .exceptions import UnableToAcquireLockError
 
-                raise UnableToAcquireLock(f"Could not acquire lock {lock.redis_key}")
+                raise UnableToAcquireLockError(
+                    f"Could not acquire lock {lock.redis_key}"
+                )
 
         result = await task.execute(**kwargs)
         return result
@@ -109,11 +112,12 @@ def load_task_registry(
 
     for group in groups:
         key = group.rsplit(".", 1)[-1]  # e.g. "transformation"
-        for ep in entry_points(group=group):
+        for ep in select_from_extension(group=group):
             task_cls: type[BaseTask] = ep.load()
             task_name = f"{key}:{task_cls.__name__}"
-            registry[task_name] = task_cls
-            logger.debug("Loaded task: %s", task_name)
+            if task_name not in registry:  # Extension priority: first wins
+                registry[task_name] = task_cls
+                logger.debug("Loaded task: %s", task_name)
 
     return registry
 

@@ -51,7 +51,7 @@ class BaseTask(ABC):
 
     @abstractmethod
     async def execute(self, **kwargs: Any) -> Any:
-        """Main execution logic of the task."""
+        """Run the task logic."""
         ...
 
     def serialize(self) -> tuple[Any, ...]:
@@ -97,7 +97,7 @@ class PeriodicVoAwareBaseTask(PeriodicBaseTask):
     schedule and lock key that includes the VO name.
     """
 
-    vo: str = ""
+    vo: str
 
     @property
     def execution_locks(self) -> list[BaseLock]:

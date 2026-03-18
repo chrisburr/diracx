@@ -14,8 +14,8 @@ def test_task_message_roundtrip():
         task_id="abc123",
         task_name="test:MyTask",
         labels={"priority": "normal", "size": "medium"},
-        args=[1, "hello", {"nested": True}],
-        kwargs={},
+        task_args=[1, "hello", {"nested": True}],
+        task_kwargs={},
     )
 
     # Serialize to BrokerMessage and back
@@ -27,7 +27,7 @@ def test_task_message_roundtrip():
     recovered = broker_msg.to_task_message()
     assert recovered.task_id == msg.task_id
     assert recovered.task_name == msg.task_name
-    assert recovered.args == msg.args
+    assert recovered.task_args == msg.task_args
     assert recovered.labels == msg.labels
 
 

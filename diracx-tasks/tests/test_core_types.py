@@ -106,7 +106,6 @@ def test_exponential_backoff():
 
 def test_exponential_backoff_delay_increases():
     policy = ExponentialBackoff(base_delay_seconds=10, max_retries=5)
-    now = datetime.now(tz=UTC)
 
     result1 = policy.schedule_retry(0, Exception())
     result2 = policy.schedule_retry(1, Exception())

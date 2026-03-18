@@ -10,6 +10,9 @@ __all__ = [
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime, timedelta
 
+from croniter import croniter
+from dateutil.rrule import rrulestr
+
 
 class TaskScheduleBase(ABC):
     """Abstract base class for task scheduling."""
@@ -37,8 +40,6 @@ class CronSchedule(TaskScheduleBase):
         self.expression = expression
 
     def next_occurrence(self) -> datetime:
-        from croniter import croniter
-
         cron = croniter(self.expression, datetime.now(tz=UTC))
         return cron.get_next(datetime)
 
@@ -50,10 +51,9 @@ class RRuleSchedule(TaskScheduleBase):
         self.rule = rule
 
     def next_occurrence(self) -> datetime:
-        from dateutil.rrule import rrulestr
-
-        rrule = rrulestr(self.rule, dtstart=datetime.now(tz=UTC))
-        result = rrule.after(datetime.now(tz=UTC))
+        now = datetime.now(tz=UTC)
+        rrule = rrulestr(self.rule, dtstart=now)
+        result = rrule.after(now)
         if result is None:
             raise ValueError(f"RRule {self.rule!r} has no future occurrences")
         return result

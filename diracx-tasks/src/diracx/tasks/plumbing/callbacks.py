@@ -2,6 +2,7 @@ from __future__ import annotations
 
 __all__ = ["spawn_with_callback"]
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -53,9 +54,8 @@ async def spawn_with_callback(
     pipe.set(f"{_group_key(group_id)}:remaining", len(children), ex=ttl_seconds)
     await pipe.execute()
 
-    # Schedule each child with the group_id in labels
-    for child in children:
-        await child.schedule()
+    # Schedule each child concurrently
+    await asyncio.gather(*(child.schedule() for child in children))
 
     logger.info(
         "Spawned %d children with callback (group_id=%s)", len(children), group_id
@@ -68,6 +68,8 @@ async def on_child_complete(
     group_id: str,
     child_task_id: str,
     result: Any,
+    *,
+    ttl_seconds: int = 86400,
 ) -> bool:
     """Record a child's completion. Returns True if the callback should fire.
 
@@ -79,7 +81,7 @@ async def on_child_complete(
     await redis.set(
         f"{_group_key(group_id)}:results:{child_task_id}",
         result_data,
-        ex=86400,
+        ex=ttl_seconds,
     )
 
     # Atomically decrement remaining counter

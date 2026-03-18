@@ -29,7 +29,7 @@ source = "vcs"
 bypass-selection = true
 
 [tool.ruff]
-src = ["diracx-*/src", "diracx-*/tests", "diracx-tasks/src"]
+src = ["diracx-*/src", "diracx-*/tests"]
 exclude = ["diracx-client/src/diracx/client"]
 
 [tool.ruff.lint]
