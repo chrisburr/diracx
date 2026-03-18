@@ -1,6 +1,6 @@
 [project]
-name = "gubbins-routers"
-description = "TODO"
+name = "gubbins-tasks"
+description = "Task definitions for the Gubbins diracx extension"
 readme = "README.md"
 requires-python = ">=3.11"
 keywords = []
@@ -12,31 +12,22 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Topic :: System :: Distributed Computing",
 ]
-
 dependencies = [
-    "diracx-routers",
-    "gubbins-tasks",
+    "diracx-tasks",
+    "gubbins-db",
 ]
-
 dynamic = ["version"]
 
 [project.optional-dependencies]
-testing = ["diracx-testing", "moto[server]", "pytest-httpx"]
-types = [
-    "boto3-stubs",
-    "types-aiobotocore[essential]",
-    "types-aiobotocore-s3",
-    "types-cachetools",
-    "types-python-dateutil",
-    "types-PyYAML",
-]
+testing = ["gubbins-testing", "diracx-testing", "fakeredis"]
 
-[project.entry-points."diracx.services"]
-lollygag = "gubbins.routers.lollygag:router"
-".well-known" = "gubbins.routers.well_known:router"
+[project.entry-points."diracx.tasks.lollygag"]
+SyncOwnersTask = "gubbins.tasks.lollygag:SyncOwnersTask"
+OwnerCleanupTask = "gubbins.tasks.lollygag:OwnerCleanupTask"
+OwnerReportTask = "gubbins.tasks.lollygag:OwnerReportTask"
 
-[project.entry-points."diracx.access_policies"]
-lollygag = "gubbins.routers.lollygag.access_policy:LollygagAccessPolicy"
+[project.entry-points."diracx.lock_object_types"]
+lollygag = "gubbins.tasks.lock_types"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -55,14 +46,10 @@ packages = ["src/gubbins"]
 testpaths = ["tests"]
 addopts = [
     "-v",
-    "--cov=gubbins.routers",
+    "--cov=gubbins.tasks",
     "--cov-report=term-missing",
-    # Both gubbins and diracx are needed here
     "-pgubbins.testing",
     "-pdiracx.testing",
     "--import-mode=importlib",
 ]
 asyncio_mode = "auto"
-markers = [
-    "enabled_dependencies: List of dependencies which should be available to the FastAPI test client",
-]

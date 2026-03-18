@@ -42,6 +42,7 @@ This page documents the available pixi tasks.
 - `pytest-gubbins-db`: Run the tests for gubbins-db
 - `pytest-gubbins-logic`: Run the tests for gubbins-logic
 - `pytest-gubbins-routers`: Run the tests for gubbins-routers
+- `pytest-gubbins-tasks`: Run the tests for gubbins-tasks
 
 ## Pre-commit Tasks
 

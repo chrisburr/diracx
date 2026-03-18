@@ -80,6 +80,8 @@ gubbins-db = { path = "extensions/gubbins/gubbins-db", editable = true, extras =
 gubbins-logic = { path = "extensions/gubbins/gubbins-logic", editable = true, extras = ["testing"] }
 [feature.gubbins-routers.pypi-dependencies]
 gubbins-routers = { path = "extensions/gubbins/gubbins-routers", editable = true, extras = ["testing"] }
+[feature.gubbins-tasks.pypi-dependencies]
+gubbins-tasks = { path = "extensions/gubbins/gubbins-tasks", editable = true, extras = ["testing"] }
 
 # Gubbins features for providing tasks. This is needed to make it so that running
 # "pixi run pytest-diracx-core -vvv --pdb" passes the arguments as expected.
@@ -108,6 +110,9 @@ description = "Run the tests for gubbins-logic"
 [feature.task-gubbins-routers.tasks.pytest-gubbins-routers]
 cmd = "cd extensions/gubbins/gubbins-routers/ && pytest"
 description = "Run the tests for gubbins-routers"
+[feature.task-gubbins-tasks.tasks.pytest-gubbins-tasks]
+cmd = "cd extensions/gubbins/gubbins-tasks/ && pytest"
+description = "Run the tests for gubbins-tasks"
 
 # Features for generating the documentation
 [feature.mkdocs.dependencies]
@@ -175,14 +180,15 @@ diracx-routers = {features = ["task-diracx-routers", "diracx-routers", "diracx-t
 diracx-tasks = {features = ["task-diracx-tasks", "diracx-tasks", "diracx-logic", "diracx-db", "diracx-core"], solve-group = "diracx"}
 
 # Gubbins environments
-default-gubbins = {features = ["task-gubbins", "diracx", "gubbins", "diracx-core", "gubbins-core", "diracx-api", "gubbins-api", "diracx-cli", "gubbins-cli", "diracx-client", "gubbins-client", "diracx-db", "gubbins-db", "diracx-logic", "gubbins-logic", "diracx-routers", "gubbins-routers", "diracx-tasks"], solve-group = "gubbins"}
+default-gubbins = {features = ["task-gubbins", "diracx", "gubbins", "diracx-core", "gubbins-core", "diracx-api", "gubbins-api", "diracx-cli", "gubbins-cli", "diracx-client", "gubbins-client", "diracx-db", "gubbins-db", "diracx-logic", "gubbins-logic", "diracx-routers", "gubbins-routers", "diracx-tasks", "gubbins-tasks"], solve-group = "gubbins"}
 gubbins-core = {features = ["task-gubbins-core", "diracx-core", "gubbins-core"], solve-group = "gubbins"}
 gubbins-api = {features = ["task-gubbins-api", "diracx-api", "gubbins-api", "diracx-client", "gubbins-client", "diracx-core", "gubbins-core"], solve-group = "gubbins"}
 gubbins-cli = {features = ["task-gubbins-cli", "diracx-cli", "gubbins-cli", "diracx-api", "gubbins-api", "diracx-client", "gubbins-client", "diracx-core", "gubbins-core"], solve-group = "gubbins"}
 gubbins-client = {features = ["task-gubbins-client", "diracx-client", "gubbins-client", "diracx-core", "gubbins-core"], solve-group = "gubbins"}
 gubbins-db = {features = ["task-gubbins-db", "diracx-db", "gubbins-db", "diracx-core", "gubbins-core"], solve-group = "gubbins"}
 gubbins-logic = {features = ["task-gubbins-logic", "diracx-logic", "gubbins-logic", "diracx-db", "gubbins-db", "diracx-core", "gubbins-core"], solve-group = "gubbins"}
-gubbins-routers = {features = ["task-gubbins-routers", "diracx-routers", "gubbins-routers", "diracx-tasks", "diracx-logic", "gubbins-logic", "diracx-db", "gubbins-db", "diracx-core", "gubbins-core"], solve-group = "gubbins"}
+gubbins-routers = {features = ["task-gubbins-routers", "diracx-routers", "gubbins-routers", "gubbins-tasks", "diracx-tasks", "diracx-logic", "gubbins-logic", "diracx-db", "gubbins-db", "diracx-core", "gubbins-core"], solve-group = "gubbins"}
+gubbins-tasks = {features = ["task-gubbins-tasks", "gubbins-tasks", "diracx-tasks", "diracx-logic", "diracx-db", "gubbins-db", "diracx-core", "gubbins-core"], solve-group = "gubbins"}
 
 diracx-generate-client = {features = ["client-gen", "diracx-client", "diracx-routers", "diracx-tasks", "diracx-logic", "diracx-db", "diracx-core"], solve-group = "diracx"}
 gubbins-generate-client = {features = ["client-gen", "diracx-client", "gubbins-client", "diracx-routers", "gubbins-routers", "diracx-tasks", "diracx-logic", "gubbins-logic", "diracx-db", "gubbins-db", "diracx-core", "gubbins-core"], solve-group = "gubbins"}
@@ -216,4 +222,5 @@ depends-on = [
   { task = "pytest-gubbins-db", environment = "gubbins-db" },
   { task = "pytest-gubbins-logic", environment = "gubbins-logic" },
   { task = "pytest-gubbins-routers", environment = "gubbins-routers" },
+  { task = "pytest-gubbins-tasks", environment = "gubbins-tasks" },
 ]
