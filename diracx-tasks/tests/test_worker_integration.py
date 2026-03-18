@@ -24,11 +24,11 @@ def _make_ackable(task_message: TaskMessage):
 
 
 async def test_worker_executes_successful_task(
-    in_memory_broker, task_class_registry, wrapped_registry
+    broker, task_class_registry, wrapped_registry
 ):
     """Worker should execute a task and produce a success result."""
     worker = Worker(
-        broker=in_memory_broker,
+        broker=broker,
         task_registry=wrapped_registry,
         task_class_registry=task_class_registry,
     )
@@ -61,11 +61,11 @@ async def test_worker_executes_successful_task(
 
 
 async def test_worker_schedules_retry_on_failure(
-    in_memory_broker, task_class_registry, wrapped_registry
+    broker, task_class_registry, wrapped_registry
 ):
     """When a task fails and has retries left, worker should schedule a retry."""
     worker = Worker(
-        broker=in_memory_broker,
+        broker=broker,
         task_registry=wrapped_registry,
         task_class_registry=task_class_registry,
     )
@@ -108,11 +108,11 @@ async def test_worker_schedules_retry_on_failure(
 
 
 async def test_worker_logs_dlq_eligible_on_no_retries(
-    in_memory_broker, task_class_registry, wrapped_registry
+    broker, task_class_registry, wrapped_registry
 ):
     """When a DLQ-eligible task fails with NoRetry, it should be flagged for DLQ."""
     worker = Worker(
-        broker=in_memory_broker,
+        broker=broker,
         task_registry=wrapped_registry,
         task_class_registry=task_class_registry,
     )
@@ -148,11 +148,11 @@ async def test_worker_logs_dlq_eligible_on_no_retries(
 
 
 async def test_worker_reschedules_on_lock_contention(
-    in_memory_broker, task_class_registry, wrapped_registry
+    broker, task_class_registry, wrapped_registry
 ):
     """When a lock can't be acquired, the task should be rescheduled."""
     worker = Worker(
-        broker=in_memory_broker,
+        broker=broker,
         task_registry=wrapped_registry,
         task_class_registry=task_class_registry,
     )
@@ -189,11 +189,11 @@ async def test_worker_reschedules_on_lock_contention(
 
 
 async def test_worker_fires_callback_on_group_completion(
-    in_memory_broker, task_class_registry, wrapped_registry
+    broker, task_class_registry, wrapped_registry
 ):
     """When the last child in a group completes, the callback should fire."""
     worker = Worker(
-        broker=in_memory_broker,
+        broker=broker,
         task_registry=wrapped_registry,
         task_class_registry=task_class_registry,
     )
@@ -232,15 +232,15 @@ async def test_worker_fires_callback_on_group_completion(
         await worker._handle_success(task_msg, result)
 
     mock_on_child.assert_called_once_with(mock_redis, "group123", "child1", "ok")
-    mock_fire.assert_called_once_with(mock_redis, "group123", in_memory_broker)
+    mock_fire.assert_called_once_with(mock_redis, "group123", broker)
 
 
 async def test_worker_does_not_fire_callback_when_not_done(
-    in_memory_broker, task_class_registry, wrapped_registry
+    broker, task_class_registry, wrapped_registry
 ):
     """When not all children are done, the callback should not fire."""
     worker = Worker(
-        broker=in_memory_broker,
+        broker=broker,
         task_registry=wrapped_registry,
         task_class_registry=task_class_registry,
     )
@@ -286,11 +286,11 @@ async def test_worker_does_not_fire_callback_when_not_done(
 
 
 async def test_process_message_acks_on_unknown_task(
-    in_memory_broker, task_class_registry, wrapped_registry
+    broker, task_class_registry, wrapped_registry
 ):
     """Unknown tasks should be acked (not left pending) and logged."""
     worker = Worker(
-        broker=in_memory_broker,
+        broker=broker,
         task_registry=wrapped_registry,
         task_class_registry=task_class_registry,
     )
@@ -309,11 +309,11 @@ async def test_process_message_acks_on_unknown_task(
 
 
 async def test_process_message_acks_on_parse_error(
-    in_memory_broker, task_class_registry, wrapped_registry
+    broker, task_class_registry, wrapped_registry
 ):
     """Unparseable messages should be acked and logged, not crash the worker."""
     worker = Worker(
-        broker=in_memory_broker,
+        broker=broker,
         task_registry=wrapped_registry,
         task_class_registry=task_class_registry,
     )

@@ -30,8 +30,8 @@ from ..exceptions import (
 )
 
 if TYPE_CHECKING:
-    from .base import AsyncBroker
-    from .result_backend import AsyncResultBackend
+    from .redis_streams import RedisStreamBroker
+    from .result_backend import RedisResultBackend
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +150,7 @@ def _prepare_arg(arg: Any) -> Any:
 
 
 def _build_task_message(
-    broker: AsyncBroker,
+    broker: RedisStreamBroker,
     task_name: str,
     task_args: Sequence[Any],
     task_kwargs: dict[str, Any],
@@ -174,7 +174,7 @@ def _build_task_message(
 
 
 async def submit_task(
-    broker: AsyncBroker,
+    broker: RedisStreamBroker,
     task_name: str,
     task_args: Sequence[Any] = (),
     task_kwargs: dict[str, Any] | None = None,
@@ -226,7 +226,7 @@ class AsyncDecoratedTask(Generic[_ReturnType]):
 
     def __init__(
         self,
-        broker: AsyncBroker,
+        broker: RedisStreamBroker,
         task_name: str,
         original_func: Callable[..., _ReturnType],
         labels: dict[str, Any],
@@ -268,7 +268,7 @@ class AsyncTask(Generic[_ReturnType]):
     def __init__(
         self,
         task_id: str,
-        result_backend: AsyncResultBackend[_ReturnType] | None,
+        result_backend: RedisResultBackend | None,
     ) -> None:
         self.task_id = task_id
         self.result_backend = result_backend

@@ -5,11 +5,18 @@ from __future__ import annotations
 import dataclasses
 from typing import Any
 
+import fakeredis
+import fakeredis.aioredis
+import msgpack
 import pytest
+from redis.asyncio import Redis
 
 from diracx.tasks.plumbing.base_task import BaseTask
-from diracx.tasks.plumbing.broker.base import AsyncBroker
 from diracx.tasks.plumbing.broker.models import BrokerMessage
+from diracx.tasks.plumbing.broker.redis_streams import (
+    ALL_STREAM_NAMES,
+    RedisStreamBroker,
+)
 from diracx.tasks.plumbing.enums import Priority, Size
 from diracx.tasks.plumbing.factory import wrap_task
 from diracx.tasks.plumbing.lock_registry import TASK, LockedObjectType
@@ -89,29 +96,20 @@ class LockedTask(BaseTask):
 
 
 # ---------------------------------------------------------------------------
-# In-memory broker for testing
+# Test helpers
 # ---------------------------------------------------------------------------
 
 
-class InMemoryBroker(AsyncBroker):
-    """A simple in-memory broker for unit/integration tests.
-
-    Stores messages in a list instead of Redis streams.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.messages: list[BrokerMessage] = []
-        self.enqueued: list[BrokerMessage] = []
-        # Create a mock connection pool so Worker._get_redis doesn't fail
-        self.connection_pool = None  # type: ignore[assignment]
-
-    async def enqueue(self, message: BrokerMessage) -> None:
-        self.enqueued.append(message)
-
-    async def listen(self):  # type: ignore[override]
-        # Not used in unit tests
-        raise NotImplementedError
+async def get_enqueued_messages(broker: RedisStreamBroker) -> list[BrokerMessage]:
+    """Read all messages from all broker streams."""
+    messages = []
+    async with Redis(connection_pool=broker.connection_pool) as redis:
+        for stream in ALL_STREAM_NAMES:
+            entries = await redis.xrange(stream)
+            for _, fields in entries:
+                msg = msgpack.unpackb(fields[b"data"], timestamp=3)
+                messages.append(BrokerMessage.model_validate(msg))
+    return messages
 
 
 # ---------------------------------------------------------------------------
@@ -120,8 +118,16 @@ class InMemoryBroker(AsyncBroker):
 
 
 @pytest.fixture
-def in_memory_broker():
-    return InMemoryBroker()
+async def broker():
+    server = fakeredis.FakeServer()
+    b = RedisStreamBroker(
+        url="redis://fake",
+        connection_class=fakeredis.aioredis.FakeConnection,
+        server=server,
+    )
+    await b.startup()
+    yield b
+    await b.shutdown()
 
 
 @pytest.fixture

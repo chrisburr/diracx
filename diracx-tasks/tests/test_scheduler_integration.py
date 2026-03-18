@@ -13,7 +13,7 @@ from diracx.tasks.plumbing.base_task import (
 from diracx.tasks.plumbing.scheduler.scheduler import TaskScheduler
 from diracx.tasks.plumbing.schedules import IntervalSeconds
 
-from .conftest import InMemoryBroker
+from .conftest import get_enqueued_messages
 
 
 class MyPeriodicTask(PeriodicBaseTask):
@@ -32,9 +32,8 @@ class MyVoAwareTask(PeriodicVoAwareBaseTask):
         return f"vo_result_{self.vo}"
 
 
-def test_compute_initial_schedules_periodic():
+def test_compute_initial_schedules_periodic(broker):
     """Periodic tasks should get an initial schedule entry."""
-    broker = InMemoryBroker()
     scheduler = TaskScheduler(
         broker=broker,
         redis_url="redis://unused",
@@ -44,7 +43,7 @@ def test_compute_initial_schedules_periodic():
     assert ("jobs:MyPeriodicTask", "") in scheduler._next_runs
 
 
-def test_compute_initial_schedules_skips_disabled():
+def test_compute_initial_schedules_skips_disabled(broker):
     """Disabled tasks should not get schedule entries."""
 
     class DisabledTask(PeriodicBaseTask):
@@ -54,7 +53,6 @@ def test_compute_initial_schedules_skips_disabled():
         async def execute(self, **kwargs: Any) -> str:
             return "never"
 
-    broker = InMemoryBroker()
     scheduler = TaskScheduler(
         broker=broker,
         redis_url="redis://unused",
@@ -64,9 +62,8 @@ def test_compute_initial_schedules_skips_disabled():
     assert len(scheduler._next_runs) == 0
 
 
-def test_compute_initial_schedules_vo_aware_no_config():
+def test_compute_initial_schedules_vo_aware_no_config(broker):
     """VO-aware tasks with no config should be skipped with a warning."""
-    broker = InMemoryBroker()
     scheduler = TaskScheduler(
         broker=broker,
         redis_url="redis://unused",
@@ -78,10 +75,8 @@ def test_compute_initial_schedules_vo_aware_no_config():
     assert len(scheduler._next_runs) == 0
 
 
-def test_compute_initial_schedules_vo_aware_with_config():
+def test_compute_initial_schedules_vo_aware_with_config(broker):
     """VO-aware tasks with config should create one entry per VO."""
-    broker = InMemoryBroker()
-
     # Mock a Config object with Registry containing VOs
     mock_config = MagicMock()
     mock_config.Registry = {"lhcb": MagicMock(), "atlas": MagicMock()}
@@ -100,16 +95,14 @@ def test_compute_initial_schedules_vo_aware_with_config():
     assert len(scheduler._next_runs) == 2
 
 
-def test_load_vos_without_config():
+def test_load_vos_without_config(broker):
     """load_vos should return empty list when no config."""
-    broker = InMemoryBroker()
     scheduler = TaskScheduler(broker=broker, redis_url="redis://unused", config=None)
     assert scheduler.load_vos() == []
 
 
-def test_load_vos_with_config():
+def test_load_vos_with_config(broker):
     """load_vos should return VO names from config Registry."""
-    broker = InMemoryBroker()
     mock_config = MagicMock()
     mock_config.Registry = {"vo1": MagicMock(), "vo2": MagicMock(), "vo3": MagicMock()}
 
@@ -120,11 +113,10 @@ def test_load_vos_with_config():
     assert sorted(vos) == ["vo1", "vo2", "vo3"]
 
 
-def test_add_vo_schedule():
+def test_add_vo_schedule(broker):
     """add_vo_schedule should register a schedule entry."""
     from datetime import UTC, datetime
 
-    broker = InMemoryBroker()
     scheduler = TaskScheduler(broker=broker, redis_url="redis://unused")
 
     now = datetime.now(tz=UTC)
@@ -134,39 +126,35 @@ def test_add_vo_schedule():
     assert scheduler._next_runs[("test:Task", "lhcb")] == now
 
 
-async def test_submit_periodic_task():
+async def test_submit_periodic_task(broker):
     """_submit_periodic_task should enqueue a message to the broker."""
-    broker = InMemoryBroker()
     scheduler = TaskScheduler(
         broker=broker,
         redis_url="redis://unused",
         task_registry={"jobs:MyPeriodicTask": MyPeriodicTask},
     )
-    await broker.startup()
 
     await scheduler._submit_periodic_task("jobs:MyPeriodicTask", "")
 
-    assert len(broker.enqueued) == 1
-    msg = broker.enqueued[0]
-    assert msg.task_name == "jobs:MyPeriodicTask"
-    assert msg.labels["periodic"] is True
+    messages = await get_enqueued_messages(broker)
+    assert len(messages) == 1
+    assert messages[0].task_name == "jobs:MyPeriodicTask"
+    assert messages[0].labels["periodic"] is True
 
 
-async def test_submit_vo_aware_periodic_task():
+async def test_submit_vo_aware_periodic_task(broker):
     """_submit_periodic_task with a VO should include vo in labels and args."""
-    broker = InMemoryBroker()
     scheduler = TaskScheduler(
         broker=broker,
         redis_url="redis://unused",
         task_registry={"jobs:MyVoAwareTask": MyVoAwareTask},
     )
-    await broker.startup()
 
     await scheduler._submit_periodic_task("jobs:MyVoAwareTask", "lhcb")
 
-    assert len(broker.enqueued) == 1
-    msg = broker.enqueued[0]
-    assert msg.labels["vo"] == "lhcb"
+    messages = await get_enqueued_messages(broker)
+    assert len(messages) == 1
+    assert messages[0].labels["vo"] == "lhcb"
     # The VO should be in the task message args
-    inner = msg.to_task_message()
+    inner = messages[0].to_task_message()
     assert inner.task_args == ["lhcb"]

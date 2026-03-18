@@ -7,15 +7,15 @@ import logging
 import time
 import uuid
 from typing import Any, AsyncGenerator, Awaitable, Callable
+from uuid import uuid4
 
 import msgpack
 from redis.asyncio import BlockingConnectionPool, Redis, ResponseError
 
 from ..enums import Priority, Size
 from ._types import _BlockingConnectionPool
-from .base import AsyncBroker
 from .models import AckableMessage, BrokerMessage
-from .result_backend import AsyncResultBackend
+from .result_backend import RedisResultBackend
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +23,16 @@ logger = logging.getLogger(__name__)
 ALL_STREAM_NAMES = [f"diracx:tasks:{p}:{s}" for p in Priority for s in Size]
 
 
+def _default_id_generator() -> str:
+    return uuid4().hex
+
+
 def stream_name_for(priority: Priority | str, size: Size | str) -> str:
     """Return the Redis stream name for a given priority+size."""
     return f"diracx:tasks:{priority}:{size}"
 
 
-class RedisStreamBroker(AsyncBroker):
+class RedisStreamBroker:
     """Redis broker using streams with 9 priority x size queues.
 
     Workers of a given size listen to 3 priority streams with strict
@@ -50,14 +54,17 @@ class RedisStreamBroker(AsyncBroker):
         idle_timeout: int = 600000,
         unacknowledged_batch_size: int = 100,
         max_connection_pool_size: int | None = None,
-        result_backend: AsyncResultBackend[Any] | None = None,
+        result_backend: RedisResultBackend | None = None,
         task_id_generator: Callable[[], str] | None = None,
         **connection_kwargs: Any,
     ) -> None:
-        super().__init__(
-            result_backend=result_backend,
-            task_id_generator=task_id_generator,
-        )
+        self.result_backend = result_backend
+        self.id_generator = task_id_generator or _default_id_generator
+        self.is_worker_process = False
+        self.is_scheduler_process = False
+        self.custom_dependency_context: dict[type, Any] = {}
+        self.dependency_overrides: dict[Callable, Callable] = {}
+
         self.connection_pool: _BlockingConnectionPool = BlockingConnectionPool.from_url(
             url=url,
             max_connections=max_connection_pool_size,
@@ -97,11 +104,13 @@ class RedisStreamBroker(AsyncBroker):
                     pass  # Group already exists
 
     async def startup(self) -> None:
-        await super().startup()
+        if self.result_backend:
+            await self.result_backend.startup()
         await self._declare_consumer_groups()
 
     async def shutdown(self) -> None:
-        await super().shutdown()
+        if self.result_backend:
+            await self.result_backend.shutdown()
         await self.connection_pool.disconnect()
 
     async def enqueue(self, message: BrokerMessage) -> None:

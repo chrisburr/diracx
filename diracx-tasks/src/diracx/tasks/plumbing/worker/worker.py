@@ -13,8 +13,8 @@ from opentelemetry import metrics, trace
 from redis.asyncio import Redis
 
 from ..base_task import BaseTask
-from ..broker.base import AsyncBroker
 from ..broker.models import AckableMessage, BrokerMessage, TaskMessage, TaskResult
+from ..broker.redis_streams import RedisStreamBroker
 from ..callbacks import fire_callback, on_child_complete
 from ..exceptions import UnableToAcquireLockError
 from ..persistence.dlq import TaskDB
@@ -77,7 +77,7 @@ class Worker:
 
     def __init__(
         self,
-        broker: AsyncBroker,
+        broker: RedisStreamBroker,
         task_registry: dict[str, Callable[..., Any]],
         task_class_registry: dict[str, type[BaseTask]],
         max_concurrent_tasks: int = 10,

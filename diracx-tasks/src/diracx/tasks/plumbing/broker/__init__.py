@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from .base import AsyncBroker
 from .models import (
     AckableMessage,
     AsyncDecoratedTask,
@@ -11,10 +10,11 @@ from .models import (
     submit_task,
 )
 from .redis_streams import RedisStreamBroker
+from .result_backend import RedisResultBackend
 
 __all__ = [
-    "AsyncBroker",
     "RedisStreamBroker",
+    "RedisResultBackend",
     "BrokerMessage",
     "TaskMessage",
     "TaskResult",

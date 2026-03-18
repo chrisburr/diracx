@@ -14,8 +14,8 @@ from redis.asyncio import BlockingConnectionPool, Redis
 
 from ..base_task import BaseTask, PeriodicBaseTask, PeriodicVoAwareBaseTask
 from ..broker._types import _BlockingConnectionPool
-from ..broker.base import AsyncBroker
 from ..broker.models import BrokerMessage, submit_task
+from ..broker.redis_streams import RedisStreamBroker
 
 if TYPE_CHECKING:
     from diracx.core.config import Config
@@ -65,7 +65,7 @@ class TaskScheduler:
 
     def __init__(
         self,
-        broker: AsyncBroker,
+        broker: RedisStreamBroker,
         redis_url: str,
         *,
         task_registry: dict[str, type[BaseTask]] | None = None,

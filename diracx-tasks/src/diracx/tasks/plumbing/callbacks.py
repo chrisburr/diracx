@@ -13,7 +13,7 @@ from redis.asyncio import Redis
 from .base_task import BaseTask
 
 if TYPE_CHECKING:
-    from .broker.base import AsyncBroker
+    from .broker.redis_streams import RedisStreamBroker
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ async def on_child_complete(
 async def fire_callback(
     redis: Redis,
     group_id: str,
-    broker: AsyncBroker,
+    broker: RedisStreamBroker,
 ) -> None:
     """Deserialize and schedule the callback task for a completed group.
 

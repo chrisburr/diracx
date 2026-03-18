@@ -8,7 +8,7 @@ import msgpack
 
 from diracx.tasks.plumbing.callbacks import fire_callback, on_child_complete
 
-from .conftest import InMemoryBroker
+from .conftest import get_enqueued_messages
 
 
 async def test_on_child_complete_returns_false_when_remaining():
@@ -45,10 +45,8 @@ async def test_on_child_complete_stores_result():
     assert "diracx:groups:grp:results:c1" in call_args[0]
 
 
-async def test_fire_callback_kicks_task():
+async def test_fire_callback_kicks_task(broker):
     """fire_callback should deserialize callback data and enqueue to broker."""
-    broker = InMemoryBroker()
-
     callback_data = msgpack.packb(
         {
             "task_class": "test.module:CallbackTask",
@@ -62,16 +60,14 @@ async def test_fire_callback_kicks_task():
 
     await fire_callback(mock_redis, "group123", broker)
 
-    assert len(broker.enqueued) == 1
-    msg = broker.enqueued[0]
-    assert msg.task_name == "test.module:CallbackTask"
-    assert msg.labels["callback_group_id"] == "group123"
+    messages = await get_enqueued_messages(broker)
+    assert len(messages) == 1
+    assert messages[0].task_name == "test.module:CallbackTask"
+    assert messages[0].labels["callback_group_id"] == "group123"
 
 
-async def test_fire_callback_logs_missing_data():
+async def test_fire_callback_logs_missing_data(broker):
     """fire_callback should handle missing callback data gracefully."""
-    broker = InMemoryBroker()
-
     mock_redis = AsyncMock()
     mock_redis.get = AsyncMock(return_value=None)
 
@@ -79,4 +75,5 @@ async def test_fire_callback_logs_missing_data():
     await fire_callback(mock_redis, "missing_group", broker)
 
     # No message enqueued
-    assert len(broker.enqueued) == 0
+    messages = await get_enqueued_messages(broker)
+    assert len(messages) == 0
