@@ -104,7 +104,7 @@ class RedisStreamBroker(AsyncBroker):
         await super().shutdown()
         await self.connection_pool.disconnect()
 
-    async def kick(self, message: BrokerMessage) -> None:
+    async def enqueue(self, message: BrokerMessage) -> None:
         """Send a message to the appropriate priority x size stream."""
         priority = message.labels.get("priority", Priority.NORMAL)
         size = message.labels.get("size", Size.MEDIUM)

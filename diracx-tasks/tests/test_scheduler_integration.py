@@ -135,7 +135,7 @@ def test_add_vo_schedule():
 
 
 async def test_submit_periodic_task():
-    """_submit_periodic_task should kick a message to the broker."""
+    """_submit_periodic_task should enqueue a message to the broker."""
     broker = InMemoryBroker()
     scheduler = TaskScheduler(
         broker=broker,
@@ -146,8 +146,8 @@ async def test_submit_periodic_task():
 
     await scheduler._submit_periodic_task("jobs:MyPeriodicTask", "")
 
-    assert len(broker.kicked) == 1
-    msg = broker.kicked[0]
+    assert len(broker.enqueued) == 1
+    msg = broker.enqueued[0]
     assert msg.task_name == "jobs:MyPeriodicTask"
     assert msg.labels["periodic"] is True
 
@@ -164,8 +164,8 @@ async def test_submit_vo_aware_periodic_task():
 
     await scheduler._submit_periodic_task("jobs:MyVoAwareTask", "lhcb")
 
-    assert len(broker.kicked) == 1
-    msg = broker.kicked[0]
+    assert len(broker.enqueued) == 1
+    msg = broker.enqueued[0]
     assert msg.labels["vo"] == "lhcb"
     # The VO should be in the task message args
     inner = msg.to_task_message()

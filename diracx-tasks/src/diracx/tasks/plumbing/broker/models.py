@@ -211,7 +211,7 @@ async def submit_task(
             raise SendTaskError(f"Failed to schedule delayed task {task_name}") from exc
     else:
         try:
-            await broker.kick(broker_message)
+            await broker.enqueue(broker_message)
         except Exception as exc:
             raise SendTaskError(f"Failed to send task {task_name} to broker") from exc
 

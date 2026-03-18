@@ -41,7 +41,7 @@ class AsyncBroker(ABC):
             await self.result_backend.shutdown()
 
     @abstractmethod
-    async def kick(self, message: BrokerMessage) -> None:
+    async def enqueue(self, message: BrokerMessage) -> None:
         """Send a message to the broker for worker consumption."""
 
     @abstractmethod

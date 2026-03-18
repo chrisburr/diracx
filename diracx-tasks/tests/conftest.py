@@ -102,12 +102,12 @@ class InMemoryBroker(AsyncBroker):
     def __init__(self) -> None:
         super().__init__()
         self.messages: list[BrokerMessage] = []
-        self.kicked: list[BrokerMessage] = []
+        self.enqueued: list[BrokerMessage] = []
         # Create a mock connection pool so Worker._get_redis doesn't fail
         self.connection_pool = None  # type: ignore[assignment]
 
-    async def kick(self, message: BrokerMessage) -> None:
-        self.kicked.append(message)
+    async def enqueue(self, message: BrokerMessage) -> None:
+        self.enqueued.append(message)
 
     async def listen(self):  # type: ignore[override]
         # Not used in unit tests

@@ -46,7 +46,7 @@ async def test_on_child_complete_stores_result():
 
 
 async def test_fire_callback_kicks_task():
-    """fire_callback should deserialize callback data and kick to broker."""
+    """fire_callback should deserialize callback data and enqueue to broker."""
     broker = InMemoryBroker()
 
     callback_data = msgpack.packb(
@@ -62,8 +62,8 @@ async def test_fire_callback_kicks_task():
 
     await fire_callback(mock_redis, "group123", broker)
 
-    assert len(broker.kicked) == 1
-    msg = broker.kicked[0]
+    assert len(broker.enqueued) == 1
+    msg = broker.enqueued[0]
     assert msg.task_name == "test.module:CallbackTask"
     assert msg.labels["callback_group_id"] == "group123"
 
@@ -78,5 +78,5 @@ async def test_fire_callback_logs_missing_data():
     # Should not raise
     await fire_callback(mock_redis, "missing_group", broker)
 
-    # No message kicked
-    assert len(broker.kicked) == 0
+    # No message enqueued
+    assert len(broker.enqueued) == 0
