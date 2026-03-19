@@ -4,14 +4,14 @@ The callback system provides a fan-out/fan-in pattern: spawn multiple child task
 
 ### Basic usage
 
-Use `spawn_with_callback` to schedule children and a callback together:
+Use `CallbackSpawner` to schedule children and a callback together:
 
 ```python
-from diracx.tasks.plumbing.callbacks import spawn_with_callback
+from diracx.tasks.plumbing.depends import CallbackSpawner
 
 
 class OrchestrationTask(BaseTask):
-    async def execute(self, _redis, **kwargs):
+    async def execute(self, spawn_with_callback: CallbackSpawner, **kwargs):
         children = [
             SyncOwnersTask(owner_name="alice"),
             SyncOwnersTask(owner_name="bob"),
@@ -19,7 +19,7 @@ class OrchestrationTask(BaseTask):
         ]
         callback = OwnerCleanupTask()
 
-        group_id = await spawn_with_callback(children, callback, redis=_redis)
+        group_id = await spawn_with_callback(children, callback)
 ```
 
 The children are scheduled immediately. When the last child completes, the worker automatically submits the callback task to the broker.
@@ -35,14 +35,17 @@ The children are scheduled immediately. When the last child completes, the worke
     - Atomically decrements the remaining counter
 4. When the counter reaches zero, the worker fires the callback
 
-### Accessing `_redis` in `execute()`
+### Using `CallbackSpawner` in `execute()`
 
-The `_redis` parameter is injected by the worker when executing a task. To use it, include it as a keyword argument in `execute()`:
+`CallbackSpawner` is a dependency injection type resolved by the worker. Declare it as a typed parameter in `execute()`:
 
 ```python
+from diracx.tasks.plumbing.depends import CallbackSpawner
+
+
 class MyTask(BaseTask):
-    async def execute(self, _redis, **kwargs):
-        # _redis is a redis.asyncio.Redis connection
+    async def execute(self, spawn_with_callback: CallbackSpawner, **kwargs):
+        group_id = await spawn_with_callback(children, callback)
         ...
 ```
 
@@ -53,5 +56,5 @@ All Redis keys created by the callback system are set with a TTL (default 24 hou
 The TTL can be configured via the `ttl_seconds` parameter:
 
 ```python
-await spawn_with_callback(children, callback, redis=_redis, ttl_seconds=3600)  # 1 hour
+await spawn_with_callback(children, callback, ttl_seconds=3600)  # 1 hour
 ```

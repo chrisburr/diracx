@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+from diracx.tasks.plumbing.base_task import BaseTask
 from diracx.tasks.plumbing.broker.models import TaskMessage, TaskResult
+from diracx.tasks.plumbing.depends import CallbackSpawner
+from diracx.tasks.plumbing.enums import Priority, Size
+from diracx.tasks.plumbing.factory import wrap_task
 from diracx.tasks.plumbing.worker.worker import Worker
 
 from .conftest import FailOnceTask
@@ -316,3 +320,47 @@ async def test_process_message_acks_on_parse_error(
     )
 
     await worker.process_message(b"not valid msgpack at all!!")
+
+
+# ---------------------------------------------------------------------------
+# TaskBroker dependency injection resolution
+# ---------------------------------------------------------------------------
+
+
+async def test_worker_resolves_callback_spawner_dependency(
+    broker, task_class_registry, wrapped_registry
+):
+    """CallbackSpawner should be resolved via dependency injection when a task declares it."""
+
+    class SpawnerUsingTask(BaseTask):
+        priority = Priority.NORMAL
+        size = Size.SMALL
+
+        async def execute(self, spawn_with_callback: CallbackSpawner) -> str:
+            return type(spawn_with_callback).__name__
+
+    wrapped = wrap_task(SpawnerUsingTask)
+    registry = {**wrapped_registry, "test:SpawnerUsingTask": wrapped}
+    class_registry = {
+        **task_class_registry,
+        "test:SpawnerUsingTask": SpawnerUsingTask,
+    }
+
+    worker = Worker(
+        broker=broker,
+        task_registry=registry,
+        task_class_registry=class_registry,
+    )
+
+    task_msg = TaskMessage(
+        task_id="t-spawner",
+        task_name="test:SpawnerUsingTask",
+        labels={"priority": "normal", "size": "small"},
+        task_args=[],
+        task_kwargs={},
+    )
+
+    result = await worker.run_task(registry["test:SpawnerUsingTask"], task_msg)
+
+    assert not result.is_err
+    assert result.return_value == "_CallbackSpawner"

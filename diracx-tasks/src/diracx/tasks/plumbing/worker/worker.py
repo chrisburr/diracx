@@ -13,7 +13,7 @@ from opentelemetry import metrics, trace
 from redis.asyncio import Redis
 
 from ..base_task import BaseTask
-from ..broker.models import AckableMessage, TaskMessage, TaskResult
+from ..broker.models import ReceivedMessage, TaskMessage, TaskResult
 from ..broker.redis_streams import RedisStreamBroker
 from ..callbacks import fire_callback, on_child_complete
 from ..exceptions import UnableToAcquireLockError
@@ -89,6 +89,18 @@ class Worker:
         self.task_class_registry = task_class_registry
         self.task_db = task_db
 
+        # Register CallbackSpawner dependency injection override
+        from ..depends import _callback_spawner_placeholder, _CallbackSpawner
+
+        pool = broker.connection_pool
+
+        async def _create_callback_spawner() -> _CallbackSpawner:
+            return _CallbackSpawner(Redis(connection_pool=pool))
+
+        broker.dependency_overrides[_callback_spawner_placeholder] = (
+            _create_callback_spawner
+        )
+
         self.sem: asyncio.Semaphore | None = None
         if max_concurrent_tasks > 0:
             self.sem = asyncio.Semaphore(max_concurrent_tasks)
@@ -103,7 +115,7 @@ class Worker:
 
         logger.info("Worker started listening for tasks")
 
-        queue: asyncio.Queue[bytes | AckableMessage] = asyncio.Queue()
+        queue: asyncio.Queue[bytes | ReceivedMessage] = asyncio.Queue()
 
         prefetcher_task = asyncio.create_task(self.prefetcher(queue, finish_event))
         runner_task = asyncio.create_task(self.runner(queue))
@@ -114,7 +126,7 @@ class Worker:
 
     async def prefetcher(
         self,
-        queue: asyncio.Queue[bytes | AckableMessage],
+        queue: asyncio.Queue[bytes | ReceivedMessage],
         finish_event: asyncio.Event,
     ) -> None:
         """Prefetch messages from broker into the internal queue.
@@ -170,7 +182,7 @@ class Worker:
 
     async def runner(
         self,
-        queue: asyncio.Queue[bytes | AckableMessage],
+        queue: asyncio.Queue[bytes | ReceivedMessage],
     ) -> None:
         """Pull messages from the queue and execute them concurrently.
 
@@ -216,13 +228,13 @@ class Worker:
         """Get a Redis connection from the broker's connection pool."""
         return Redis(connection_pool=self.broker.connection_pool)
 
-    async def process_message(self, message: bytes | AckableMessage) -> None:
+    async def process_message(self, message: bytes | ReceivedMessage) -> None:
         """Deserialize, look up, execute, and ack a single broker message.
 
         After execution, handles retry scheduling or dead letter queue persistence for
         failed tasks, and fires callbacks for group-member tasks.
         """
-        message_data = message.data if isinstance(message, AckableMessage) else message
+        message_data = message.data if isinstance(message, ReceivedMessage) else message
 
         try:
             task_message = TaskMessage.loadb(message_data)
@@ -232,14 +244,14 @@ class Worker:
                 message_data[:200].hex(),
                 exc_info=True,
             )
-            if isinstance(message, AckableMessage):
+            if isinstance(message, ReceivedMessage):
                 await message.ack()
             return
 
         task_func = self.task_registry.get(task_message.task_name)
         if task_func is None:
             logger.warning("Task %r not found in registry", task_message.task_name)
-            if isinstance(message, AckableMessage):
+            if isinstance(message, ReceivedMessage):
                 await message.ack()
             return
 
@@ -264,7 +276,7 @@ class Worker:
         except Exception:
             logger.exception("Failed to save result")
 
-        if isinstance(message, AckableMessage):
+        if isinstance(message, ReceivedMessage):
             await message.ack()
 
     async def _handle_failure(
@@ -429,7 +441,9 @@ class Worker:
         ``TaskResult`` wrapping either the return value or the
         exception.
 
-        Passes a Redis connection as ``_redis`` for lock acquisition.
+        Passes a Redis connection as ``_redis`` to ``task_wrapper`` for
+        lock acquisition.  Task-level callback spawning is available via
+        the ``CallbackSpawner`` dependency type.
         """
         retry_count = task_message.labels.get("_retry_attempt", 0)
         span_attrs = {
@@ -490,9 +504,10 @@ class Worker:
                 all_kwargs = {
                     **dep_kwargs,
                     **task_message.task_kwargs,
-                    "_redis": redis,
                 }
-                returned = await task_func(*task_message.task_args, **all_kwargs)
+                returned = await task_func(
+                    *task_message.task_args, _redis=redis, **all_kwargs
+                )
 
         except UnableToAcquireLockError:
             logger.info(

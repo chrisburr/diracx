@@ -13,7 +13,7 @@ from redis.asyncio import BlockingConnectionPool, Redis, ResponseError
 
 from ..enums import Priority, Size
 from ._types import _BlockingConnectionPool
-from .models import AckableMessage, TaskMessage
+from .models import ReceivedMessage, TaskMessage
 from .result_backend import RedisResultBackend
 
 logger = logging.getLogger(__name__)
@@ -138,7 +138,7 @@ class RedisStreamBroker:
 
         return _ack
 
-    async def listen(self) -> AsyncGenerator[AckableMessage, None]:
+    async def listen(self) -> AsyncGenerator[ReceivedMessage, None]:
         """Yield messages from streams in strict priority order.
 
         Drains higher-priority streams before moving to lower ones.
@@ -160,7 +160,7 @@ class RedisStreamBroker:
 
                 for stream, msg_list in fetched:
                     for msg_id, msg in msg_list:
-                        yield AckableMessage(
+                        yield ReceivedMessage(
                             data=msg[b"data"],
                             ack=self._ack_generator(msg_id=msg_id, queue_name=stream),
                         )
@@ -194,7 +194,7 @@ class RedisStreamBroker:
                             )
 
                         for msg_id, msg in pending[1]:
-                            yield AckableMessage(
+                            yield ReceivedMessage(
                                 data=msg[b"data"],
                                 ack=self._ack_generator(
                                     msg_id=msg_id, queue_name=sname

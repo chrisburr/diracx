@@ -24,12 +24,16 @@ __all__ = (
     "AuthSettings",
     "DevelopmentSettings",
     "SandboxStoreSettings",
+    "CallbackSpawner",
+    "_CallbackSpawner",
+    "_callback_spawner_placeholder",
 )
 
 from functools import partial
-from typing import Annotated, TypeVar
+from typing import TYPE_CHECKING, Annotated, TypeVar
 
 from fastapi import Depends
+from redis.asyncio import Redis as _Redis
 
 from diracx.core.config import Config as _Config
 from diracx.core.config import ConfigSource
@@ -44,6 +48,9 @@ from diracx.db.sql import JobLoggingDB as _JobLoggingDB
 from diracx.db.sql import PilotAgentsDB as _PilotAgentsDB
 from diracx.db.sql import SandboxMetadataDB as _SandboxMetadataDB
 from diracx.db.sql import TaskQueueDB as _TaskQueueDB
+
+if TYPE_CHECKING:
+    from .base_task import BaseTask as _BaseTask
 
 T = TypeVar("T")
 
@@ -84,3 +91,35 @@ DevelopmentSettings = Annotated[
 SandboxStoreSettings = Annotated[
     _SandboxStoreSettings, Depends(_SandboxStoreSettings.create)
 ]
+
+
+# Callback spawner
+class _CallbackSpawner:
+    """Spawn child tasks with a callback, with the Redis connection already bound."""
+
+    def __init__(self, redis: _Redis):
+        self._redis = redis
+
+    async def __call__(
+        self,
+        children: list[_BaseTask],
+        callback: _BaseTask,
+        *,
+        ttl_seconds: int = 86400,
+    ) -> str:
+        from .callbacks import spawn_with_callback
+
+        return await spawn_with_callback(
+            children, callback, redis=self._redis, ttl_seconds=ttl_seconds
+        )
+
+
+async def _callback_spawner_placeholder() -> _CallbackSpawner:
+    """Raise because this must be overridden via broker.dependency_overrides."""
+    raise RuntimeError(
+        "CallbackSpawner can only be resolved inside a task worker. "
+        "Register an override in broker.dependency_overrides."
+    )
+
+
+CallbackSpawner = Annotated[_CallbackSpawner, Depends(_callback_spawner_placeholder)]

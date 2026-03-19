@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from .models import (
-    AckableMessage,
     AsyncDecoratedTask,
     AsyncTask,
+    ReceivedMessage,
     TaskMessage,
     TaskResult,
     submit_task,
@@ -16,7 +16,7 @@ __all__ = [
     "RedisResultBackend",
     "TaskMessage",
     "TaskResult",
-    "AckableMessage",
+    "ReceivedMessage",
     "AsyncDecoratedTask",
     "AsyncTask",
     "submit_task",

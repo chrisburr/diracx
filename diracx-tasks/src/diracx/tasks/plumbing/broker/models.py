@@ -3,7 +3,7 @@ from __future__ import annotations
 __all__ = [
     "TaskMessage",
     "TaskResult",
-    "AckableMessage",
+    "ReceivedMessage",
     "AsyncDecoratedTask",
     "AsyncTask",
     "submit_task",
@@ -111,7 +111,7 @@ class TaskResult(BaseModel, Generic[_ReturnType]):
         return self
 
 
-class AckableMessage(BaseModel):
+class ReceivedMessage(BaseModel):
     """Message that can be acknowledged after processing."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
