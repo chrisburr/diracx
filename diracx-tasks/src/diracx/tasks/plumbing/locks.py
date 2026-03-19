@@ -15,8 +15,7 @@ import time
 import uuid
 from abc import ABC, abstractmethod
 
-from redis.asyncio import Redis
-
+from ._redis_types import LockCoordinator
 from .lock_registry import LockedObjectType
 
 logger = logging.getLogger(__name__)
@@ -150,7 +149,7 @@ class BaseLock(ABC):
         return ":".join(parts)
 
     @abstractmethod
-    async def acquire(self, redis: Redis) -> bool:
+    async def acquire(self, redis: LockCoordinator) -> bool:
         """Attempt to acquire the lock.
 
         Returns True if acquired, False otherwise.
@@ -158,11 +157,11 @@ class BaseLock(ABC):
         ...
 
     @abstractmethod
-    async def release(self, redis: Redis) -> None:
+    async def release(self, redis: LockCoordinator) -> None:
         """Release the lock."""
         ...
 
-    async def extend(self, redis: Redis) -> bool:
+    async def extend(self, redis: LockCoordinator) -> bool:
         """Extend the TTL of the lock (watchdog pattern).
 
         Returns True if the extension succeeded, False if the lock
@@ -199,7 +198,7 @@ class MutexLock(BaseLock):
     def redis_key(self) -> str:
         return f"lock:mutex:{super().redis_key}"
 
-    async def acquire(self, redis: Redis) -> bool:
+    async def acquire(self, redis: LockCoordinator) -> bool:
         result = await redis.set(
             self.redis_key,
             self._owner_id,
@@ -208,12 +207,12 @@ class MutexLock(BaseLock):
         )
         return result is not None
 
-    async def release(self, redis: Redis) -> None:
+    async def release(self, redis: LockCoordinator) -> None:
         await redis.eval(  # type: ignore[arg-type]
             _MUTEX_RELEASE_SCRIPT, 1, self.redis_key, self._owner_id
         )
 
-    async def extend(self, redis: Redis) -> bool:
+    async def extend(self, redis: LockCoordinator) -> bool:
         """Extend the TTL only if we still own the lock."""
         result = await redis.eval(  # type: ignore[arg-type]
             _MUTEX_EXTEND_SCRIPT, 1, self.redis_key, self._owner_id, str(self.ttl_ms)
@@ -247,7 +246,7 @@ class ExclusiveRWLock(BaseLock):
     def redis_key(self) -> str:
         return f"lock:rw:{super().redis_key}"
 
-    async def acquire(self, redis: Redis) -> bool:
+    async def acquire(self, redis: LockCoordinator) -> bool:
         result = await redis.eval(  # type: ignore[arg-type]
             _EXCLUSIVE_ACQUIRE_SCRIPT,
             1,
@@ -257,12 +256,12 @@ class ExclusiveRWLock(BaseLock):
         )
         return bool(result)
 
-    async def release(self, redis: Redis) -> None:
+    async def release(self, redis: LockCoordinator) -> None:
         await redis.eval(  # type: ignore[arg-type]
             _EXCLUSIVE_RELEASE_SCRIPT, 1, self.redis_key, self._owner_id
         )
 
-    async def extend(self, redis: Redis) -> bool:
+    async def extend(self, redis: LockCoordinator) -> bool:
         """Extend the TTL only if we still own the write lock."""
         result = await redis.eval(  # type: ignore[arg-type]
             _EXCLUSIVE_EXTEND_SCRIPT,
@@ -290,13 +289,13 @@ class SharedRWLock(BaseLock):
     def redis_key(self) -> str:
         return f"lock:rw:{super().redis_key}"
 
-    async def acquire(self, redis: Redis) -> bool:
+    async def acquire(self, redis: LockCoordinator) -> bool:
         result = await redis.eval(  # type: ignore[arg-type]
             _SHARED_ACQUIRE_SCRIPT, 1, self.redis_key
         )
         return bool(result)
 
-    async def release(self, redis: Redis) -> None:
+    async def release(self, redis: LockCoordinator) -> None:
         await redis.eval(  # type: ignore[arg-type]
             _SHARED_RELEASE_SCRIPT, 1, self.redis_key
         )
@@ -342,7 +341,7 @@ class RateLimiter(BaseLimiter):
     def redis_key(self) -> str:
         return f"limiter:rate:{super().redis_key}"
 
-    async def acquire(self, redis: Redis) -> bool:
+    async def acquire(self, redis: LockCoordinator) -> bool:
         if self.limit is None or self.window_seconds is None:
             return True
 
@@ -357,7 +356,7 @@ class RateLimiter(BaseLimiter):
         )
         return bool(result)
 
-    async def release(self, redis: Redis) -> None:
+    async def release(self, redis: LockCoordinator) -> None:
         pass  # Rate limiters don't release
 
 
@@ -394,7 +393,7 @@ class ConcurrencyLimiter(BaseLimiter):
     def redis_key(self) -> str:
         return f"limiter:conc:{super().redis_key}"
 
-    async def acquire(self, redis: Redis) -> bool:
+    async def acquire(self, redis: LockCoordinator) -> bool:
         if self.limit is None:
             return True
 
@@ -411,14 +410,14 @@ class ConcurrencyLimiter(BaseLimiter):
         )
         return bool(result)
 
-    async def release(self, redis: Redis) -> None:
+    async def release(self, redis: LockCoordinator) -> None:
         if self.limit is None:
             return
         await redis.eval(  # type: ignore[arg-type]
             _CONCURRENCY_RELEASE_SCRIPT, 1, self.redis_key, self._owner_id
         )
 
-    async def extend(self, redis: Redis) -> bool:
+    async def extend(self, redis: LockCoordinator) -> bool:
         """Extend the expiry for this holder (watchdog pattern)."""
         expiry_ms = int(time.time() * 1000) + self.ttl_ms
         result = await redis.zadd(self.redis_key, {self._owner_id: expiry_ms}, xx=True)

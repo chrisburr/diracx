@@ -33,7 +33,6 @@ from functools import partial
 from typing import TYPE_CHECKING, Annotated, TypeVar
 
 from fastapi import Depends
-from redis.asyncio import Redis as _Redis
 
 from diracx.core.config import Config as _Config
 from diracx.core.config import ConfigSource
@@ -48,6 +47,8 @@ from diracx.db.sql import JobLoggingDB as _JobLoggingDB
 from diracx.db.sql import PilotAgentsDB as _PilotAgentsDB
 from diracx.db.sql import SandboxMetadataDB as _SandboxMetadataDB
 from diracx.db.sql import TaskQueueDB as _TaskQueueDB
+
+from ._redis_types import CallbackRegistry
 
 if TYPE_CHECKING:
     from .base_task import BaseTask as _BaseTask
@@ -97,7 +98,7 @@ SandboxStoreSettings = Annotated[
 class _CallbackSpawner:
     """Spawn child tasks with a callback, with the Redis connection already bound."""
 
-    def __init__(self, redis: _Redis):
+    def __init__(self, redis: CallbackRegistry):
         self._redis = redis
 
     async def __call__(

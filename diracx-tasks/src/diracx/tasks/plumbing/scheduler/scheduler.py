@@ -11,6 +11,7 @@ from uuid import uuid4
 from opentelemetry import metrics
 from redis.asyncio import BlockingConnectionPool, Redis
 
+from .._redis_types import MessageTransport
 from ..base_task import BaseTask, PeriodicBaseTask, PeriodicVoAwareBaseTask
 from ..broker._types import _BlockingConnectionPool
 from ..broker.models import TaskMessage, submit_task
@@ -412,7 +413,7 @@ class TaskScheduler:
 
     @staticmethod
     async def schedule_delayed(
-        redis: Redis,
+        redis: MessageTransport,
         message: TaskMessage,
         run_at: datetime,
     ) -> None:

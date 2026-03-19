@@ -10,10 +10,10 @@ from inspect import Parameter, signature
 from typing import Any, Callable
 
 from fastapi.dependencies.utils import get_dependant
-from redis.asyncio import Redis
 
 from diracx.core.extensions import select_from_extension
 
+from ._redis_types import LockCoordinator
 from .base_task import BaseTask
 from .broker.models import AsyncDecoratedTask
 from .locks import BaseLimiter, BaseLock
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _lock_watchdog(
-    held_locks: list[tuple[BaseLock, Redis]],
+    held_locks: list[tuple[BaseLock, LockCoordinator]],
     stop_event: asyncio.Event,
     interval: float = 10.0,
 ) -> None:
@@ -45,7 +45,7 @@ async def _lock_watchdog(
 async def task_wrapper(  # noqa: D417
     cls: type[BaseTask],
     *args: Any,
-    _redis: Redis | None = None,
+    _redis: LockCoordinator | None = None,
     _interactive: bool = False,
     **kwargs: Any,
 ) -> Any:
@@ -64,7 +64,7 @@ async def task_wrapper(  # noqa: D417
 
     """
     task = cls(*args)
-    held_locks: list[tuple[BaseLock, Redis]] = []
+    held_locks: list[tuple[BaseLock, LockCoordinator]] = []
     watchdog_task: asyncio.Task[None] | None = None
     try:
         for lock in task.execution_locks:

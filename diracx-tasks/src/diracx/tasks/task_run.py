@@ -16,7 +16,10 @@ import signal
 import sys
 import traceback
 from enum import StrEnum
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
+
+if TYPE_CHECKING:
+    from .plumbing._redis_types import LockCoordinator
 
 DEFAULT_REDIS_URL = "redis://localhost"
 REDIS_URL_ENV_VAR = "DIRACX_TASKS_REDIS_URL"
@@ -195,7 +198,7 @@ async def call_task(
         sys.exit(1)
 
     # Try to connect to Redis for lock acquisition
-    redis = None
+    redis: LockCoordinator | None = None
     redis_url = os.environ.get(REDIS_URL_ENV_VAR)
     if redis_url:
         from redis.asyncio import Redis

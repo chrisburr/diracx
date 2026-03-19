@@ -12,6 +12,7 @@ import msgpack
 from opentelemetry import metrics, trace
 from redis.asyncio import Redis
 
+from .._redis_types import CallbackRegistry, LockCoordinator
 from ..base_task import BaseTask
 from ..broker.models import ReceivedMessage, TaskMessage, TaskResult
 from ..broker.redis_streams import RedisStreamBroker
@@ -95,7 +96,8 @@ class Worker:
         pool = broker.connection_pool
 
         async def _create_callback_spawner() -> _CallbackSpawner:
-            return _CallbackSpawner(Redis(connection_pool=pool))
+            redis: CallbackRegistry = Redis(connection_pool=pool)
+            return _CallbackSpawner(redis)
 
         broker.dependency_overrides[_callback_spawner_placeholder] = (
             _create_callback_spawner
@@ -224,7 +226,7 @@ class Worker:
 
         logger.info("Runner stopped")
 
-    async def _get_redis(self) -> Redis:
+    async def _get_redis(self) -> LockCoordinator:
         """Get a Redis connection from the broker's connection pool."""
         return Redis(connection_pool=self.broker.connection_pool)
 

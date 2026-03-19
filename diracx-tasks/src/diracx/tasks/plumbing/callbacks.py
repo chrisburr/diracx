@@ -8,8 +8,8 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 import msgpack
-from redis.asyncio import Redis
 
+from ._redis_types import CallbackRegistry
 from .base_task import BaseTask
 
 if TYPE_CHECKING:
@@ -26,7 +26,7 @@ async def spawn_with_callback(
     children: list[BaseTask],
     callback: BaseTask,
     *,
-    redis: Redis,
+    redis: CallbackRegistry,
     ttl_seconds: int = 86400,
 ) -> str:
     """Schedule child tasks and a callback that fires when all children complete.
@@ -81,7 +81,7 @@ async def spawn_with_callback(
 
 
 async def on_child_complete(
-    redis: Redis,
+    redis: CallbackRegistry,
     group_id: str,
     child_task_id: str,
     result: Any,
@@ -107,7 +107,7 @@ async def on_child_complete(
 
 
 async def fire_callback(
-    redis: Redis,
+    redis: CallbackRegistry,
     group_id: str,
     broker: RedisStreamBroker,
 ) -> None:
