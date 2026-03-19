@@ -130,7 +130,14 @@ nav:
       - Backend:
           - Getting started: dev/tutorials/getting-started.md
           - Larger developments: dev/tutorials/larger-developments.md
-          - Advanced tutorial: dev/tutorials/advanced-tutorial.md
+          - Advanced tutorial:
+              - dev/tutorials/advanced-tutorial/index.md
+              - Design: dev/tutorials/advanced-tutorial/design.md
+              - Database: dev/tutorials/advanced-tutorial/database.md
+              - Tasks: dev/tutorials/advanced-tutorial/tasks.md
+              - Router: dev/tutorials/advanced-tutorial/router.md
+              - Testing: dev/tutorials/advanced-tutorial/testing.md
+              - Running locally: dev/tutorials/advanced-tutorial/running-locally.md
           - Making changes: dev/tutorials/making-changes.md
           - Run a full DiracX instance locally: dev/tutorials/run-locally.md
           - Play with auth: dev/tutorials/play-with-auth.md
@@ -238,7 +245,8 @@ markdown_extensions:
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_div_format
   - pymdownx.inlinehilite
-  - pymdownx.snippets
+  - pymdownx.snippets:
+      base_path: ['.']
   - pymdownx.highlight:
       anchor_linenums: true
       line_spans: __span

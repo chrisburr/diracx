@@ -89,6 +89,12 @@ gubbins-tasks = { path = "extensions/gubbins/gubbins-tasks", editable = true, ex
 [feature.task-gubbins.tasks.pytest-gubbins]
 cmd = "cd extensions/gubbins/ && pytest"
 description = "Run the tests for gubbins"
+[feature.task-gubbins.tasks.tutorial-reset]
+cmd = "python scripts/tutorial_reset.py"
+description = "Strip tutorial code from gubbins for the advanced tutorial"
+[feature.task-gubbins.tasks.test-tutorial]
+cmd = "cd extensions/gubbins/ && pytest -k my_pilot"
+description = "Run only the advanced tutorial tests"
 [feature.task-gubbins-core.tasks.pytest-gubbins-core]
 cmd = "cd extensions/gubbins/gubbins-core/ && pytest"
 description = "Run the tests for gubbins-core"

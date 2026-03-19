@@ -12,6 +12,8 @@ This page documents the available pixi tasks.
 ## Default Tasks
 
 - `description`: Run pre-commit hooks
+- `test-tutorial`: Run only the advanced tutorial tests
+- `tutorial-reset`: Strip tutorial code from gubbins for the advanced tutorial
 
 ## DiracX Tasks
 
