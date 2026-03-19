@@ -124,17 +124,15 @@ async def start_worker(
     from .plumbing.broker import RedisStreamBroker
     from .plumbing.factory import (
         BaseTask,
-        create_broker_task_mapping,
+        create_task_bindings,
         load_task_registry,
     )
     from .plumbing.worker import Worker
 
     broker = RedisStreamBroker(url=redis_url)
     task_classes = load_task_registry()
-    broker_task_mapping, wrapped_registry = create_broker_task_mapping(
-        broker, task_classes
-    )
-    BaseTask.bind_broker(broker_task_mapping)
+    task_bindings, wrapped_registry = create_task_bindings(broker, task_classes)
+    BaseTask.bind_broker(task_bindings)
 
     worker = Worker(
         broker=broker,

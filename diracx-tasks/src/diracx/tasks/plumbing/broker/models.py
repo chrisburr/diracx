@@ -4,7 +4,7 @@ __all__ = [
     "TaskMessage",
     "TaskResult",
     "ReceivedMessage",
-    "BrokerTask",
+    "TaskBinding",
     "submit_task",
 ]
 
@@ -173,12 +173,12 @@ async def submit_task(
     if run_at is not None:
         from redis.asyncio import Redis
 
-        from ..scheduler.scheduler import TaskScheduler
+        from ..scheduler.scheduler import schedule_delayed
 
         try:
             redis = Redis(connection_pool=broker.connection_pool)
             async with redis:
-                await TaskScheduler.schedule_delayed(redis, task_message, run_at)
+                await schedule_delayed(redis, task_message, run_at)
         except Exception as exc:
             raise SendTaskError(f"Failed to schedule delayed task {task_name}") from exc
     else:
@@ -191,7 +191,7 @@ async def submit_task(
 
 
 @dataclasses.dataclass
-class BrokerTask:
+class TaskBinding:
     """Maps a task class to its broker for submission."""
 
     broker: RedisStreamBroker

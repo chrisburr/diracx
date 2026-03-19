@@ -15,7 +15,7 @@ from diracx.core.extensions import select_from_extension
 
 from ._redis_types import LockCoordinator
 from .base_task import BaseTask
-from .broker.models import BrokerTask
+from .broker.models import TaskBinding
 from .locks import BaseLimiter, BaseLock
 
 logger = logging.getLogger(__name__)
@@ -178,28 +178,28 @@ def load_task_registry(
     return registry
 
 
-def create_broker_task_mapping(
+def create_task_bindings(
     broker: Any,
     task_registry: dict[str, type[BaseTask]],
-) -> tuple[dict[type[BaseTask], BrokerTask], dict[str, Callable[..., Any]]]:
-    """Create broker task mapping and wrapped function registry.
+) -> tuple[dict[type[BaseTask], TaskBinding], dict[str, Callable[..., Any]]]:
+    """Create task bindings and wrapped function registry.
 
     Returns:
-        Tuple of (broker_task_mapping, wrapped_registry)
+        Tuple of (task_bindings, wrapped_registry)
 
     """
-    broker_task_mapping: dict[type[BaseTask], BrokerTask] = {}
+    task_bindings: dict[type[BaseTask], TaskBinding] = {}
     wrapped_registry: dict[str, Callable[..., Any]] = {}
 
     for task_name, task_cls in task_registry.items():
         wrapped_func = wrap_task(task_cls)
 
-        decorated_task = BrokerTask(
+        binding = TaskBinding(
             broker=broker,
             task_name=task_name,
         )
 
-        broker_task_mapping[task_cls] = decorated_task
+        task_bindings[task_cls] = binding
         wrapped_registry[task_name] = wrapped_func
 
-    return broker_task_mapping, wrapped_registry
+    return task_bindings, wrapped_registry

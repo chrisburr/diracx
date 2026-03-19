@@ -15,7 +15,7 @@ from .retry_policies import NoRetry, RetryPolicyBase
 from .schedules import TaskScheduleBase
 
 if TYPE_CHECKING:
-    from .broker.models import BrokerTask
+    from .broker.models import TaskBinding
 
 
 class BaseTask(ABC):
@@ -29,20 +29,20 @@ class BaseTask(ABC):
     # ContextVar so concurrent async contexts (e.g. worker + scheduler in
     # the same process, or parallel test cases) each get their own isolated
     # broker binding without interfering with each other.
-    _broker_registry: ClassVar[ContextVar[dict[type, BrokerTask] | None]] = ContextVar(
+    _broker_registry: ClassVar[ContextVar[dict[type, TaskBinding] | None]] = ContextVar(
         "_broker_registry", default=None
     )
 
     @classmethod
-    def bind_broker(cls, broker_task_mapping: dict[type[BaseTask], BrokerTask]) -> None:
-        """Bind task classes to their broker decorated tasks.
+    def bind_broker(cls, task_bindings: dict[type[BaseTask], TaskBinding]) -> None:
+        """Bind task classes to their broker task bindings.
 
         Uses context variables to allow multiple concurrent broker bindings
         in different async contexts.
         """
         if cls._broker_registry.get() is not None:
             raise RuntimeError("Tasks are already bound to a broker in this context")
-        cls._broker_registry.set(broker_task_mapping)
+        cls._broker_registry.set(task_bindings)
 
     @property
     def execution_locks(self) -> list[BaseLock]:

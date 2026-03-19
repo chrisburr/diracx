@@ -19,7 +19,7 @@ from ..broker.redis_streams import RedisStreamBroker
 from ..callbacks import fire_callback, on_child_complete
 from ..exceptions import UnableToAcquireLockError
 from ..persistence.dlq import TaskDB
-from ..scheduler.scheduler import DELAYED_ZSET_KEY
+from ..scheduler.scheduler import schedule_delayed
 from .di_resolver import solve_task_dependencies
 
 logger = logging.getLogger(__name__)
@@ -337,10 +337,7 @@ class Worker:
         try:
             redis = await self._get_redis()
             async with redis:
-                await redis.zadd(
-                    DELAYED_ZSET_KEY,
-                    {retry_task_message.dumpb(): retry_at.timestamp()},
-                )
+                await schedule_delayed(redis, retry_task_message, retry_at)
             logger.info(
                 "Scheduled retry %d for task %s at %s",
                 attempt,

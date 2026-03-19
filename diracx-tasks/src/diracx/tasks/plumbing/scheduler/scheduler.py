@@ -68,6 +68,18 @@ return promoted
 DELAYED_ZSET_KEY = "diracx:tasks:delayed"
 
 
+async def schedule_delayed(
+    redis: MessageTransport,
+    message: TaskMessage,
+    run_at: datetime,
+) -> None:
+    """Add a task to the delayed ZSET for future execution."""
+    await redis.zadd(
+        DELAYED_ZSET_KEY,
+        {message.dumpb(): run_at.timestamp()},
+    )
+
+
 class TaskScheduler:
     """Scheduler managing periodic tasks and delayed ZSET polling.
 
@@ -410,15 +422,3 @@ class TaskScheduler:
         self, options: metrics.CallbackOptions
     ) -> list[metrics.Observation]:
         return [metrics.Observation(self._delayed_zset_size)]
-
-    @staticmethod
-    async def schedule_delayed(
-        redis: MessageTransport,
-        message: TaskMessage,
-        run_at: datetime,
-    ) -> None:
-        """Add a task to the delayed ZSET for future execution."""
-        await redis.zadd(
-            DELAYED_ZSET_KEY,
-            {message.dumpb(): run_at.timestamp()},
-        )
