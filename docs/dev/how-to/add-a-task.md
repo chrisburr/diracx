@@ -131,6 +131,41 @@ class OwnerReportTask(PeriodicVoAwareBaseTask):
 
 Available schedules: `IntervalSeconds`, `CronSchedule`, `RRuleSchedule`.
 
+### Retries and error handling
+
+The task system has two independent retry mechanisms:
+
+**Failure retries** apply when `execute()` raises an exception. The worker consults the task's `retry_policy` to decide whether and when to retry:
+
+- `NoRetry()` (default) — the task is not retried.
+- `ExponentialBackoff(base_delay_seconds=10, max_retries=5)` — retries with increasing delays (`base * 2^attempt`).
+
+Both policies implement `schedule_retry(attempt, exception)`, which returns a `datetime` for the next attempt or `None` to stop retrying. You can subclass `RetryPolicyBase` to write a custom policy.
+
+**Lock contention retries** happen automatically when a task cannot acquire its execution locks (e.g. another instance holds the mutex). These bypass the retry policy entirely — the worker reschedules the task after a fixed delay and does not decrement the retry budget.
+
+#### Choosing `dlq_eligible`
+
+When a task exhausts its retries, the `dlq_eligible` flag controls what happens next:
+
+- `dlq_eligible = True` — the task is persisted to a dead-letter queue (DLQ) for later inspection or manual replay. Use this for tasks where losing the work is unacceptable, such as syncing external state or processing user requests.
+- `dlq_eligible = False` (default) — the task is discarded with a warning log. Use this for periodic or self-healing tasks where the next scheduled run will cover the missed work.
+
+#### Explicitly requesting a retry
+
+Raise `TaskRetryRequestedError` inside `execute()` to signal that the task should be retried regardless of the exception type. The retry policy still controls the timing and maximum attempts:
+
+```python
+from diracx.tasks.plumbing.exceptions import TaskRetryRequestedError
+
+
+async def execute(self, lollygag_db: LollygagDB, **kwargs):
+    result = await lollygag_db.try_sync(self.owner_name)
+    if result.needs_retry:
+        raise TaskRetryRequestedError("upstream not ready")
+    return result.value
+```
+
 ### Test interactively
 
 Use `diracx-task-run call` to execute a task directly:

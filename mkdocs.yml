@@ -141,7 +141,7 @@ nav:
           - Making changes: dev/tutorials/making-changes.md
           - Run a full DiracX instance locally: dev/tutorials/run-locally.md
           - Play with auth: dev/tutorials/play-with-auth.md
-          - Create a task: dev/tutorials/create-a-task.md
+
       - Frontend:
           - Web:
               - Getting started: dev/tutorials/web-getting-started.md
