@@ -52,7 +52,7 @@ async def task_wrapper(  # noqa: D417
     """Instantiate a task, acquire locks, and execute it.
 
     ``args`` are the task's constructor arguments (from serialization).
-    ``kwargs`` are resolved DI dependencies for ``execute()``.
+    ``kwargs`` are resolved dependency injection dependencies for ``execute()``.
 
     Parameters
     ----------
@@ -110,7 +110,7 @@ def wrap_task(cls: type[BaseTask]) -> Callable[..., Any]:
 
     The wrapper has a modified signature that includes:
     - Positional args for task construction
-    - Keyword-only params from ``execute()`` (for DI resolution)
+    - Keyword-only params from ``execute()`` (for dependency injection resolution)
 
     Also attaches ``_dependant`` for FastAPI dependency resolution.
     """

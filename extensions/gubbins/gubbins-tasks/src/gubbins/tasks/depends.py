@@ -1,4 +1,4 @@
-"""DI type definitions for gubbins tasks.
+"""Dependency injection type definitions for gubbins tasks.
 
 Re-exported by ``gubbins.routers.dependencies`` so that both routers
 and the task worker can resolve them.

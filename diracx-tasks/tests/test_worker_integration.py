@@ -1,4 +1,4 @@
-"""Integration tests for the Worker: retry flow, DLQ, callbacks, lock handling."""
+"""Integration tests for the Worker: retry flow, dead letter queue, callbacks, lock handling."""
 
 from __future__ import annotations
 
@@ -100,14 +100,14 @@ async def test_worker_schedules_retry_on_failure(
 
 
 # ---------------------------------------------------------------------------
-# DLQ flow
+# Dead letter queue flow
 # ---------------------------------------------------------------------------
 
 
 async def test_worker_logs_dlq_eligible_on_no_retries(
     broker, task_class_registry, wrapped_registry
 ):
-    """When a DLQ-eligible task fails with NoRetry, it should be flagged for DLQ."""
+    """When a dead-letter-queue-eligible task fails with NoRetry, it should be persisted."""
     worker = Worker(
         broker=broker,
         task_registry=wrapped_registry,
@@ -131,7 +131,7 @@ async def test_worker_logs_dlq_eligible_on_no_retries(
 
     assert result.is_err
 
-    # _handle_failure should log the DLQ intent (no zadd since NoRetry)
+    # _handle_failure should log the dead letter queue intent (no zadd since NoRetry)
     with patch.object(worker, "_get_redis", return_value=mock_redis):
         await worker._handle_failure(task_msg, result)
 

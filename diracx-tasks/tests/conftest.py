@@ -56,7 +56,7 @@ class FailOnceTask(BaseTask):
 
 
 class DLQTask(BaseTask):
-    """A task that always fails and is DLQ-eligible."""
+    """A task that always fails and is dead-letter-queue-eligible."""
 
     priority = Priority.NORMAL
     size = Size.MEDIUM

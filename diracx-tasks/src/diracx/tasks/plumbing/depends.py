@@ -1,4 +1,4 @@
-"""Canonical DI type definitions for tasks.
+"""Canonical dependency injection type definitions for tasks.
 
 These are the same Annotated types used in ``diracx.routers.dependencies``
 but defined here so that the task worker can resolve them without importing

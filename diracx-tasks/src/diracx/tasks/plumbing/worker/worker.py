@@ -63,7 +63,7 @@ class Worker:
     many tasks execute in parallel (also semaphore-gated).
 
     On failure, the worker consults the task's ``retry_policy`` to decide
-    whether to reschedule via the delayed ZSET or persist to the DLQ.
+    whether to reschedule via the delayed ZSET or persist to the dead letter queue.
 
     Flow::
 
@@ -219,7 +219,7 @@ class Worker:
     async def process_message(self, message: bytes | AckableMessage) -> None:
         """Deserialize, look up, execute, and ack a single broker message.
 
-        After execution, handles retry scheduling or DLQ persistence for
+        After execution, handles retry scheduling or dead letter queue persistence for
         failed tasks, and fires callbacks for group-member tasks.
         """
         message_data = message.data if isinstance(message, AckableMessage) else message
@@ -249,7 +249,7 @@ class Worker:
 
         result = await self.run_task(task_func, task_message)
 
-        # Handle failure: retry or DLQ
+        # Handle failure: retry or dead letter queue
         if result.is_err:
             await self._handle_failure(task_message, result)
 
@@ -274,7 +274,7 @@ class Worker:
         task_message: TaskMessage,
         result: TaskResult[Any],
     ) -> None:
-        """Consult retry policy and either reschedule or send to DLQ."""
+        """Consult retry policy and either reschedule or send to dead letter queue."""
         task_cls = self.task_class_registry.get(task_message.task_name)
         if task_cls is None:
             logger.warning(
@@ -349,7 +349,7 @@ class Worker:
         """Persist a permanently failed task to the Dead Letter Queue."""
         if self.task_db is None:
             logger.warning(
-                "Task %s (ID: %s) exhausted retries, DLQ-eligible but no TaskDB "
+                "Task %s (ID: %s) exhausted retries, dead-letter-queue-eligible but no TaskDB "
                 "configured. Error: %s",
                 task_message.task_name,
                 task_message.task_id,
@@ -374,14 +374,16 @@ class Worker:
                 max_retries=max_retries,
             )
             logger.info(
-                "Task %s (ID: %s) persisted to DLQ (dlq_id=%d). Error: %s",
+                "Task %s (ID: %s) persisted to dead letter queue (dlq_id=%d). Error: %s",
                 task_message.task_name,
                 task_message.task_id,
                 dlq_id,
                 error_msg,
             )
         except Exception:
-            logger.exception("Failed to persist task %s to DLQ", task_message.task_name)
+            logger.exception(
+                "Failed to persist task %s to dead letter queue", task_message.task_name
+            )
 
     async def _handle_success(
         self,

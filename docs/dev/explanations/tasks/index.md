@@ -122,3 +122,51 @@ The broker should provide functionality to:
 ### Resource utilisation
 
 To ensure the stability of the system, all workers should be configured to enforce memory and CPU limits. If these limits are exceeded the DiracX task system must be able to detect and report the issue, however in the case of small workers such detection may be unreliable due to technical constraints in async environments.
+
+## Implementation overview
+
+### Package structure
+
+The framework lives in `diracx-tasks` under `diracx.tasks.plumbing`. Domain-specific tasks are defined in extension packages and discovered at runtime through entry points in the `diracx.tasks.<category>` group (e.g. `diracx.tasks.lollygag`). The `gubbins-tasks` package demonstrates this extension pattern.
+
+### Key components
+
+| Module                             | Purpose                                                                                                 |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `plumbing/broker/redis_streams.py` | `RedisStreamBroker` — enqueue and consume tasks across nine Redis Streams (3 priorities × 3 sizes)      |
+| `plumbing/worker/worker.py`        | `Worker` — prefetch-and-run loop that acquires locks, resolves dependency injection, and executes tasks |
+| `plumbing/scheduler/scheduler.py`  | `TaskScheduler` — singleton that manages periodic task schedules and promotes delayed tasks             |
+| `plumbing/locks.py`                | Lock primitives: `MutexLock`, `ExclusiveRWLock`, `SharedRWLock`, `RateLimiter`, `ConcurrencyLimiter`    |
+| `plumbing/callbacks.py`            | Fan-out/fan-in: `spawn_with_callback` creates child tasks, fires a callback when all complete           |
+| `plumbing/persistence/dlq.py`      | `TaskDB` — SQL-backed dead-letter queue for tasks marked `dlq_eligible`                                 |
+| `plumbing/base_task.py`            | `BaseTask`, `PeriodicBaseTask`, `PeriodicVoAwareBaseTask` base classes                                  |
+| `plumbing/lock_registry.py`        | `LockedObjectType` registry and `register_locked_object_type()`                                         |
+| `plumbing/depends.py`              | Dependency injection type annotations shared between tasks and routers                                  |
+
+### Environment variables
+
+The Redis connection used by the broker, worker, and scheduler is configured with:
+
+```bash
+export DIRACX_TASKS_REDIS_URL="redis://localhost:6379"
+```
+
+### CLI
+
+The `diracx-task-run` command provides three subcommands:
+
+- **`call <entry_point>`** — execute a single task interactively (limiters are skipped, structural locks are still acquired). Useful for debugging and manual recovery.
+- **`worker`** — start a worker process that consumes tasks from the broker.
+- **`scheduler`** — start the singleton scheduler that submits periodic tasks and promotes delayed tasks.
+
+This command is provided by `diracx-tasks` and not `diracx-cli` as it is expected to be ran on the same infrastructure as the DiracX tasks workers (e.g. in debug pod in Kubernetes).
+
+### Extension pattern
+
+Extensions define tasks in their own packages and register them via entry points. `gubbins-tasks` demonstrates the full pattern:
+
+- **Tasks** are registered under `diracx.tasks.<category>` (e.g. `diracx.tasks.lollygag`).
+- **Custom lock types** are registered under `diracx.lock_object_types` by calling `register_locked_object_type()` at module level.
+- **Dependency injection types** for new databases are defined in a `depends.py` using `DBDepends` from `diracx.tasks.plumbing.depends`.
+
+See the [how-to guide](../../how-to/add-a-task.md) for a step-by-step walkthrough.

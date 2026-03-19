@@ -9,11 +9,23 @@
 
 ## Abstract
 
-TODO
+DiracX tasks is a lightweight, async-first task execution framework built on Redis Streams. It replaces several DIRAC components with a unified broker/worker/scheduler model that supports prioritised queuing, distributed locking, periodic scheduling, dependency injection, dead-letter persistence, and extension via entry points. The components it replaces are:
+
+- **Agents** — long-running processes that periodically poll databases to perform work (e.g. `SiteDirector`, `TransformationAgent`).
+- **Executors / Optimisers** — reactive, push-based processors that receive tasks from a central Mind service and pass them through processing chains (e.g. the job optimisation pipeline: `JobPath` → `JobSanity` → `InputData` → `JobScheduling`).
 
 ## Motivation
 
-[Why is this decision needed now? What problem or limitation in the current system does it address? What are the functional and non-functional drivers?]
+DIRAC's current workload execution relies on Agents (periodic pollers) and Executors (reactive processors coordinated by Mind services). This architecture has several limitations:
+
+- **Coupling:** Agent logic mixes scheduling, execution, locking, and retry concerns into a single `execute()` cycle, making agents difficult to test and extend. Executors add a separate push-based model with its own Mind services, task freezing, and fast-track dispatch — two fundamentally different execution paradigms for what is conceptually the same problem.
+- **Complexity:** While the underlying primitive of an Agent is simple — poll a database and act — the emergent behaviour of how agents interact when running asynchronously is extremely difficult to model. This is a persistent source of race conditions in DIRAC, for example around transformation state transitions where multiple agents may concurrently add input data or modify the same transformation without explicit coordination.
+- **Scaling:** Agents can typically only be scaled by partitioning their work through configuration (e.g. multiple `SiteDirector` instances each handling a subset of sites, or multiple `TransformationAgent` instances each handling different transformation types). This requires manual coordination and there is no enforcement that partitions don't overlap.
+- **Latency:** Agents are fundamentally periodic, polling at a configured interval (default 120 seconds). They cannot react to external input in real time. The Executor/Mind model was introduced to address this for job optimisation, but it adds significant architectural complexity (Mind services, `ExecutorDispatcher`, task freezing, fast-track dispatch) despite being a generic framework that was only ever used for that single use case.
+- **Resource overhead:** Each agent type requires a dedicated process, making it expensive to scale the number of distinct task types. The Executor model allows pooling but requires its own infrastructure (Mind services, message clients).
+- **Kubernetes fit:** Long-running agent processes with internal state and configuration-based partitioning are awkward to operate in container-orchestrated environments where stateless, horizontally scalable workloads are the norm.
+
+The task system addresses these by unifying both Agents and Executors into a single model, decomposing workload execution into independent components (broker, worker, scheduler) that are stateless, horizontally scalable, and naturally suited to distributed deployments. Tasks are plain Python classes with declarative configuration for priority, size, locking, and retries, making them easy to write, test interactively, and extend through the standard DiracX entry-point mechanism.
 
 ## Specification
 

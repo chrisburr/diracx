@@ -1,7 +1,7 @@
 """Example task implementations using the Gubbins LollygagDB.
 
 Demonstrates:
-- One-shot tasks with custom locks, retry policy, and DLQ
+- One-shot tasks with custom locks, retry policy, and dead letter queue
 - Periodic tasks with IntervalSeconds schedule
 - VO-aware periodic tasks with CronSchedule
 - Custom ``LockedObjectType`` (``LOLLYGAG``) for domain-specific locking

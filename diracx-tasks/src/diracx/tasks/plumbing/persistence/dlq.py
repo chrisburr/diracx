@@ -54,7 +54,7 @@ class DeadLetterQueue(DLQBase):
 
 
 class TaskDB(BaseSQLDB):
-    """Database for task DLQ persistence."""
+    """Database for task dead letter queue persistence."""
 
     metadata = DLQBase.metadata
 
@@ -77,7 +77,7 @@ class TaskDB(BaseSQLDB):
         return result.lastrowid
 
     async def mark_dispatched(self, dlq_id: int) -> None:
-        """Mark a DLQ task as dispatched to Redis."""
+        """Mark a dead letter queue task as dispatched to Redis."""
         stmt = (
             update(DeadLetterQueue)
             .where(DeadLetterQueue.id == dlq_id)
@@ -86,7 +86,7 @@ class TaskDB(BaseSQLDB):
         await self.conn.execute(stmt)
 
     async def mark_failed(self, dlq_id: int, error: str) -> None:
-        """Mark a DLQ task as permanently failed."""
+        """Mark a dead letter queue task as permanently failed."""
         stmt = (
             update(DeadLetterQueue)
             .where(DeadLetterQueue.id == dlq_id)
@@ -99,7 +99,7 @@ class TaskDB(BaseSQLDB):
         await self.conn.execute(stmt)
 
     async def delete_dlq_task(self, dlq_id: int) -> None:
-        """Remove a completed task from the DLQ."""
+        """Remove a completed task from the dead letter queue."""
         stmt = delete(DeadLetterQueue).where(DeadLetterQueue.id == dlq_id)
         await self.conn.execute(stmt)
 
