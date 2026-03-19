@@ -369,11 +369,21 @@ Upon first start:
 
 ## Rationale
 
-### `MutexLock` vs `ConcurrencyLimiter`
+### `Limiter` vs `Lock`
 
-Explain *why* the chosen design looks the way it does. Why these trade-offs? Why this level of abstraction? Connect specific design choices back to the drivers in Motivation.
+The specification distinguishes between locks (always enforced) and limiters (only enforced during non-interactive execution). This separation exists because tasks may be executed interactively, e.g. during development or debugging, where an administrator deliberately wants to bypass throttling. A `MutexLock` on an LFN must always be enforced because concurrent mutations would corrupt state regardless of context. A `RateLimiter` on a storage element exists to protect the external system from overload, which is irrelevant when an operator is manually running a single task to investigate an issue. Making this distinction explicit in the type hierarchy rather than a flag on BaseLock means the enforcement policy is visible in the class definition and cannot be accidentally bypassed or forgotten.
+
+### `ConcurrencyLimiter` vs `RateLimiter`
+
+Both are limiters but they protect against different failure modes. A `ConcurrencyLimiter` is stateful, it tracks tasks that are currently executing and only releases a slot when a task completes. This makes it effective for long-running operations: if a storage element becomes slow, in-flight tasks hold their slots longer, naturally applying backpressure and preventing new tasks from piling on. A `RateLimiter` is stateless with respect to in-flight work, it counts executions within a time window regardless of whether previous tasks have completed. This makes it appropriate for protecting systems where our tasks complete quickly but trigger asynchronous work on the remote side, for example, submitting file transfers where the task returns once the request is accepted but the external service continues processing. A concurrency limiter would release the slot immediately, allowing unbounded submissions that overwhelm the remote system. Tasks can declare both when needed, for example, a concurrency limit to apply backpressure when our operations are slow and a rate limit to cap the rate at which we submit work to external systems.
 
 ### `MutexLock` for Periodic Tasks
+
+Periodic tasks default to a `MutexLock` on their class name (or class name + VO for VO-aware tasks) rather than the concurrency/rate limiters that regular tasks receive. This is because periodic tasks are typically "sweep the world" operations — they scan a database and act on everything they find. Running two instances concurrently would either duplicate work or require the task itself to handle coordination, which is the complexity the locking system exists to avoid. The mutex is scoped per-class (or per-class-per-VO) so that different periodic task types can still run concurrently with each other. Subclasses can opt out if their specific workload is safe to parallelise.
+
+### Why three sizes / three priorities?
+
+The three size classes (`SMALL`, `MEDIUM`, `LARGE`) exist to allow independent worker scaling with different resource allocations — a worker consuming small tasks can run on a pod with minimal memory, while large tasks may need significantly more. The three priority levels (`BACKGROUND`, `NORMAL`, `REALTIME`) ensure that latency-sensitive work (e.g. job optimisation triggered by a user submission) is not blocked behind bulk background work (e.g. accounting aggregation). Using separate streams rather than a single stream with metadata-based routing means workers only consume from streams matching their size class, and within that class always drain higher-priority streams first. This is a natural fit for Redis Streams' `XREADGROUP` which accepts multiple stream keys with independent cursors.
 
 ### Dependency Injection
 
@@ -384,12 +394,28 @@ Explain *why* the chosen design looks the way it does. Why these trade-offs? Why
 - Pragmatically, `diracx-tasks` will always be installed alongside `diracx-routers` so we can reuse the same dependency injection system without introducing a new one just for tasks.
 - Importing from within the same subpackage hides this implementation detail and allows us to change the implementation in the future without breaking compatibility.
 
-### Resource Status Restrictions
-
 ## Rejected Ideas
 
 ### Why not a third party library (e.g. Celery, taskiq, dramatiq, ...)?
 
-## Open Issues
+We evaluated several async Python task queue libraries (Celery, Taskiq, arq, dramatiq). While mature and capable, adapting any of them to DiracX's requirements would require extensive customisation that negates the benefit of using an off-the-shelf solution:
 
-[Any points still being decided or discussed. Remove this section once the status moves to Accepted.]
+- **Async-native**: DiracX is async-first throughout. Celery and dramatiq are synchronous, immediately ruling them out. Taskiq and arq are async-native but still have the issues below.
+- **Entry point discovery**: Libraries assume tasks are defined in application code. We need entry point-based discovery for extensions, requiring a custom task loader.
+- **Dependency injection**: DiracX uses FastAPI-style dependency injection for database connections and settings. Libraries have their own DI systems (e.g. Taskiq's `TaskiqDepends`), so we'd maintain two DI containers or build a bridge between them.
+- **Declarative locking**: Our `execution_locks()` model — where locks are acquired before execution and configurable per lock type, object type, and even specific object ID — is a task semantic, not a middleware concern. Libraries lack built-in lock primitives and their middleware hooks don't support retry paths for lock acquisition failures.
+- **Configuration-driven periodic tasks**: Libraries typically use code-based scheduling (e.g. Celery beat) which doesn't fit our need for configuration-driven periodic tasks that can be enabled/disabled and have their schedules overridden without code changes.
+- **Ephemeral broker**: Our durability model discards pending tasks on restart, recreating them from authoritative database state. Task queues treat in-flight tasks as durable, which conflicts with this design and would require working around their persistence guarantees.
+- **Priority × size streams**: Nine distinct streams (3 priorities × 3 sizes) for independent worker scaling would require either nine broker instances or heavily customised queue routing.
+
+By building directly on Redis Streams primitives (consumer groups, pending entry lists, sorted sets for scheduling), we avoid the overhead of mapping our requirements onto a general-purpose library's model. The trade-off is that we're Redis-only (acceptable since DiracX already requires Redis) and must build our own monitoring, but we avoid maintaining a complex adaptation layer where debugging becomes "is this a library issue or our wrapper?".
+
+### Why not persist broker state?
+
+Operating Redis with strong durability guarantees (AOF fsync every write, replication, sentinel failover) adds significant operational complexity. By treating the broker as ephemeral, Redis can be run with without persistence settings since losing its contents is a normal operational event, not a disaster. On restart, startup entry points reset in-flight states in the database (e.g. PENDING → RECEIVED) and the scheduler repopulates the broker from authoritative database state. This also eliminates an entire class of consistency bugs: there is no second source of truth that can diverge from the database (e.g. a task enqueued for a job that has since been cancelled). The trade-off is that the state machine of DiracX objects must be designed to tolerate this reset, but this is a simpler constraint to enforce than guaranteeing broker/database consistency across restarts.
+
+### Make tasks classes aware of resource requirements so status can be enforced by diracx-tasks?
+
+We considered making task classes declare their resource dependencies (e.g. which storage elements or compute elements a task requires) so that diracx-tasks could check resource status before execution and skip tasks targeting banned or degraded resources. This was rejected because tasks often depend on combinations of resource types, a file transfer task may require both a source and destination storage element to be active. Encoding these relationships generically in the task framework would add significant complexity to `BaseTask` for what is ultimately domain logic that varies per task type.
+
+Instead, tasks that interact with resources should check status within their execute() method and raise a retryable exception if a required resource is unavailable. This keeps resource awareness in the domain logic where the specific combination of resources is known. The `RetryPolicyBase.schedule_retry(attempt, exception)` interface already receives the exception, so a retry policy can distinguish between a `ResourceUnavailableError` (retry soon, the resource may recover) and an unrecoverable failure.
