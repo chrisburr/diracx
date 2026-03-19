@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..exceptions import (
     ResultGetError,
+    ResultIsMissingError,
     ResultIsReadyError,
     SendTaskError,
     TaskResultTimeoutError,
@@ -282,7 +283,7 @@ class AsyncTask(Generic[_ReturnType]):
         while True:
             try:
                 return await self.result_backend.get_result(self.task_id)
-            except ResultGetError:
+            except ResultIsMissingError:
                 pass  # Result not ready yet
             if 0 < timeout < time() - start_time:
                 raise TaskResultTimeoutError(timeout=timeout)

@@ -174,21 +174,20 @@ class TaskScheduler:
             now = datetime.now(tz=UTC)
 
             coros = []
-            due_keys = []
+            due_updates: dict[tuple[str, str], datetime] = {}
             for (task_name, vo), next_run in list(self._next_runs.items()):
                 if now >= next_run:
                     coros.append(self._submit_periodic_task(task_name, vo))
-                    due_keys.append((task_name, vo))
+                    task_cls = self.task_registry.get(task_name)
+                    if task_cls and hasattr(task_cls, "default_schedule"):
+                        due_updates[(task_name, vo)] = (
+                            task_cls.default_schedule.next_occurrence()
+                        )
 
             if coros:
                 await asyncio.gather(*coros)
 
-            for task_name, vo in due_keys:
-                task_cls = self._find_task_class(task_name)
-                if task_cls and hasattr(task_cls, "default_schedule"):
-                    self._next_runs[(task_name, vo)] = (
-                        task_cls.default_schedule.next_occurrence()
-                    )
+            self._next_runs.update(due_updates)
 
             try:
                 await asyncio.wait_for(finish_event.wait(), timeout=self.check_interval)

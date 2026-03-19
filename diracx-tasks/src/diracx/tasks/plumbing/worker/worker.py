@@ -252,9 +252,7 @@ class Worker:
         # Handle failure: retry or dead letter queue
         if result.is_err:
             await self._handle_failure(task_message, result)
-
-        # Handle success: persist result and fire callbacks
-        if not result.is_err:
+        else:
             await self._handle_success(task_message, result)
 
         # Always persist the result to the backend
@@ -496,15 +494,7 @@ class Worker:
                 }
                 returned = await task_func(*task_message.task_args, **all_kwargs)
 
-            if async_exit_stack:
-                await async_exit_stack.aclose()
-
         except UnableToAcquireLockError:
-            if async_exit_stack:
-                try:
-                    await async_exit_stack.aclose()
-                except Exception:
-                    logger.debug("Error closing exit stack", exc_info=True)
             logger.info(
                 "Lock contention for task %s, rescheduling",
                 task_message.task_name,
@@ -520,17 +510,19 @@ class Worker:
 
         except BaseException as exc:
             found_exception = exc
-            if async_exit_stack:
-                try:
-                    await async_exit_stack.aclose()
-                except Exception:
-                    logger.debug("Error closing exit stack", exc_info=True)
             logger.error(
                 "Exception in task %s: %s",
                 task_message.task_name,
                 exc,
                 exc_info=True,
             )
+
+        finally:
+            if async_exit_stack:
+                try:
+                    await async_exit_stack.aclose()
+                except Exception:
+                    logger.debug("Error closing exit stack", exc_info=True)
 
         execution_time = time() - start_time
 
