@@ -4,34 +4,25 @@ __all__ = [
     "TaskMessage",
     "TaskResult",
     "ReceivedMessage",
-    "AsyncDecoratedTask",
-    "AsyncTask",
+    "BrokerTask",
     "submit_task",
 ]
 
-import asyncio
+import dataclasses
 import logging
 import traceback
 from collections.abc import Sequence
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
-from time import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Generic, TypeVar
 
 import msgpack
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..exceptions import (
-    ResultGetError,
-    ResultIsMissingError,
-    ResultIsReadyError,
-    SendTaskError,
-    TaskResultTimeoutError,
-)
+from ..exceptions import SendTaskError
 
 if TYPE_CHECKING:
     from .redis_streams import RedisStreamBroker
-    from .result_backend import RedisResultBackend
 
 logger = logging.getLogger(__name__)
 
@@ -162,11 +153,13 @@ async def submit_task(
     labels: dict[str, Any] | None = None,
     task_id: str | None = None,
     run_at: datetime | None = None,
-) -> AsyncTask[Any]:
+) -> str:
     """Send a task to the broker for execution.
 
     When ``run_at`` is provided, the task is added to the delayed ZSET
     and will be promoted to a stream when the time arrives.
+
+    Returns the task_id.
     """
     task_message = _build_task_message(
         broker=broker,
@@ -194,29 +187,16 @@ async def submit_task(
         except Exception as exc:
             raise SendTaskError(f"Failed to send task {task_name} to broker") from exc
 
-    return AsyncTask[Any](
-        task_id=task_message.task_id,
-        result_backend=broker.result_backend,
-    )
+    return task_message.task_id
 
 
-class AsyncDecoratedTask(Generic[_ReturnType]):
-    """Wrapper for task functions providing submit() for broker dispatch."""
+@dataclasses.dataclass
+class BrokerTask:
+    """Maps a task class to its broker for submission."""
 
-    def __init__(
-        self,
-        broker: RedisStreamBroker,
-        task_name: str,
-        original_func: Callable[..., _ReturnType],
-        labels: dict[str, Any],
-    ) -> None:
-        self.broker = broker
-        self.task_name = task_name
-        self.original_func = original_func
-        self.labels = labels
-
-    def __call__(self, *args: Any, **kwargs: Any) -> _ReturnType:
-        return self.original_func(*args, **kwargs)
+    broker: RedisStreamBroker
+    task_name: str
+    labels: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     async def submit(
         self,
@@ -224,7 +204,7 @@ class AsyncDecoratedTask(Generic[_ReturnType]):
         labels: dict[str, Any] | None = None,
         run_at: datetime | None = None,
         **kwargs: Any,
-    ) -> AsyncTask[_ReturnType]:
+    ) -> str:
         merged_labels = {**self.labels}
         if labels:
             merged_labels.update(labels)
@@ -236,55 +216,3 @@ class AsyncDecoratedTask(Generic[_ReturnType]):
             labels=merged_labels,
             run_at=run_at,
         )
-
-    def __repr__(self) -> str:
-        return f"AsyncDecoratedTask({self.task_name})"
-
-
-class AsyncTask(Generic[_ReturnType]):
-    """Handle for tracking a submitted task's result."""
-
-    def __init__(
-        self,
-        task_id: str,
-        result_backend: RedisResultBackend | None,
-    ) -> None:
-        self.task_id = task_id
-        self.result_backend = result_backend
-
-    async def is_ready(self) -> bool:
-        if self.result_backend is None:
-            raise ResultIsReadyError("No result backend configured")
-        try:
-            return await self.result_backend.is_result_ready(self.task_id)
-        except Exception as exc:
-            raise ResultIsReadyError(
-                f"Failed to check if task {self.task_id} is ready"
-            ) from exc
-
-    async def get_result(self) -> TaskResult[_ReturnType]:
-        if self.result_backend is None:
-            raise ResultGetError("No result backend configured")
-        try:
-            return await self.result_backend.get_result(self.task_id)
-        except Exception as exc:
-            raise ResultGetError(
-                f"Failed to get result for task {self.task_id}"
-            ) from exc
-
-    async def wait_result(
-        self,
-        check_interval: float = 0.2,
-        timeout: float = -1.0,
-    ) -> TaskResult[_ReturnType]:
-        if self.result_backend is None:
-            raise ResultGetError("No result backend configured")
-        start_time = time()
-        while True:
-            try:
-                return await self.result_backend.get_result(self.task_id)
-            except ResultIsMissingError:
-                pass  # Result not ready yet
-            if 0 < timeout < time() - start_time:
-                raise TaskResultTimeoutError(timeout=timeout)
-            await asyncio.sleep(check_interval)

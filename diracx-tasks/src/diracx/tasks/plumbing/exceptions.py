@@ -8,9 +8,6 @@ __all__ = [
     "TaskRetryRequestedError",
     "SendTaskError",
     "ResultIsMissingError",
-    "ResultIsReadyError",
-    "ResultGetError",
-    "TaskResultTimeoutError",
 ]
 
 
@@ -40,19 +37,3 @@ class SendTaskError(Exception):
 
 class ResultIsMissingError(Exception):
     """Raised when trying to get a result that doesn't exist."""
-
-
-class ResultIsReadyError(Exception):
-    """Raised when we can't check if result is ready."""
-
-
-class ResultGetError(Exception):
-    """Raised when we can't get result from backend."""
-
-
-class TaskResultTimeoutError(Exception):
-    """Raised when waiting for result times out."""
-
-    def __init__(self, timeout: float):
-        self.timeout = timeout
-        super().__init__(f"Task did not complete within {timeout} seconds")

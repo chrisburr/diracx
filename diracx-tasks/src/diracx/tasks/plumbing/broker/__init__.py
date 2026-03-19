@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from .models import (
-    AsyncDecoratedTask,
-    AsyncTask,
+    BrokerTask,
     ReceivedMessage,
     TaskMessage,
     TaskResult,
@@ -17,7 +16,6 @@ __all__ = [
     "TaskMessage",
     "TaskResult",
     "ReceivedMessage",
-    "AsyncDecoratedTask",
-    "AsyncTask",
+    "BrokerTask",
     "submit_task",
 ]

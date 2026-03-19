@@ -15,7 +15,7 @@ from diracx.core.extensions import select_from_extension
 
 from ._redis_types import LockCoordinator
 from .base_task import BaseTask
-from .broker.models import AsyncDecoratedTask
+from .broker.models import BrokerTask
 from .locks import BaseLimiter, BaseLock
 
 logger = logging.getLogger(__name__)
@@ -181,24 +181,22 @@ def load_task_registry(
 def create_broker_task_mapping(
     broker: Any,
     task_registry: dict[str, type[BaseTask]],
-) -> tuple[dict[type[BaseTask], AsyncDecoratedTask], dict[str, Callable[..., Any]]]:
+) -> tuple[dict[type[BaseTask], BrokerTask], dict[str, Callable[..., Any]]]:
     """Create broker task mapping and wrapped function registry.
 
     Returns:
         Tuple of (broker_task_mapping, wrapped_registry)
 
     """
-    broker_task_mapping: dict[type[BaseTask], AsyncDecoratedTask] = {}
+    broker_task_mapping: dict[type[BaseTask], BrokerTask] = {}
     wrapped_registry: dict[str, Callable[..., Any]] = {}
 
     for task_name, task_cls in task_registry.items():
         wrapped_func = wrap_task(task_cls)
 
-        decorated_task = AsyncDecoratedTask(
+        decorated_task = BrokerTask(
             broker=broker,
             task_name=task_name,
-            original_func=wrapped_func,
-            labels={},
         )
 
         broker_task_mapping[task_cls] = decorated_task

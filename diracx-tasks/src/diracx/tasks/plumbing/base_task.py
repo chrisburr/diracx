@@ -15,7 +15,7 @@ from .retry_policies import NoRetry, RetryPolicyBase
 from .schedules import TaskScheduleBase
 
 if TYPE_CHECKING:
-    from .broker.models import AsyncDecoratedTask, AsyncTask
+    from .broker.models import BrokerTask
 
 
 class BaseTask(ABC):
@@ -29,14 +29,12 @@ class BaseTask(ABC):
     # ContextVar so concurrent async contexts (e.g. worker + scheduler in
     # the same process, or parallel test cases) each get their own isolated
     # broker binding without interfering with each other.
-    _broker_registry: ClassVar[ContextVar[dict[type, AsyncDecoratedTask] | None]] = (
-        ContextVar("_broker_registry", default=None)
+    _broker_registry: ClassVar[ContextVar[dict[type, BrokerTask] | None]] = ContextVar(
+        "_broker_registry", default=None
     )
 
     @classmethod
-    def bind_broker(
-        cls, broker_task_mapping: dict[type[BaseTask], AsyncDecoratedTask]
-    ) -> None:
+    def bind_broker(cls, broker_task_mapping: dict[type[BaseTask], BrokerTask]) -> None:
         """Bind task classes to their broker decorated tasks.
 
         Uses context variables to allow multiple concurrent broker bindings
@@ -74,7 +72,7 @@ class BaseTask(ABC):
         *,
         at_time: datetime | None = None,
         labels: dict[str, Any] | None = None,
-    ) -> AsyncTask:
+    ) -> str:
         """Schedule the task for execution via the broker.
 
         When ``at_time`` is provided, the task is added to the delayed
