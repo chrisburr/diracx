@@ -9,10 +9,12 @@ from .schema import Base as MyPilotDBBase
 from .schema import MyComputeElements, MyPilotStatus, MyPilotSubmissions
 
 
+# --8<-- [start:my_pilot_db_class_header]
 class MyPilotDB(BaseSQLDB):
     """Database for managing pilot submissions to compute elements."""
 
     metadata = MyPilotDBBase.metadata
+    # --8<-- [end:my_pilot_db_class_header]
 
     async def add_ce(
         self, name: str, capacity: int, success_rate: float, enabled: bool = True
@@ -22,6 +24,7 @@ class MyPilotDB(BaseSQLDB):
         )
         await self.conn.execute(stmt)
 
+    # --8<-- [start:my_pilot_db_get_available_ces]
     async def get_available_ces(self) -> list[dict]:
         active_counts = (
             select(
@@ -64,6 +67,8 @@ class MyPilotDB(BaseSQLDB):
             }
             for row in result
         ]
+
+    # --8<-- [end:my_pilot_db_get_available_ces]
 
     async def submit_pilot(self, ce_name: str) -> int:
         stmt = insert(MyPilotSubmissions).values(

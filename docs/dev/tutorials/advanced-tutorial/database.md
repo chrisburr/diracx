@@ -2,83 +2,145 @@
 
 We create a new `MyPilotDB` class from scratch (not extending an
 existing DB). This shows the full lifecycle of adding a database to
-DiracX.
+DiracX — from schema definition through to dependency injection.
 
 ## Schema
 
-Create `extensions/gubbins/gubbins-db/src/gubbins/db/sql/my_pilot_db/schema.py`:
+The schema defines our two tables and the status enum:
 
 <!-- blacken-docs:off -->
 
-```python
+```python title="gubbins-db/src/gubbins/db/sql/my_pilot_db/schema.py"
 --8<-- "extensions/gubbins/gubbins-db/src/gubbins/db/sql/my_pilot_db/schema.py"
 ```
 
 <!-- blacken-docs:on -->
 
-Key points:
+Let's unpack the DiracX database conventions used here:
 
-- `MyPilotStatus` is a `StrEnum` — stored as a string in the DB
-- Each table has its own `DeclarativeBase` subclass (`Base`)
-- `datetime_now` provides a server-default UTC timestamp
-- `str255` maps to `String(255)` via the `type_annotation_map`
-- Foreign key links `MyPilotSubmissions.ce_name` to `MyComputeElements.name`
+- **`DeclarativeBase`** — Each database module defines its own `Base`
+    subclass. This keeps table metadata isolated so that different
+    databases don't interfere with each other.
+- **`str255`** — A DiracX type alias that maps to `String(255)` via
+    `type_annotation_map`. Use it for any short text column.
+- **`datetime_now`** — Provides a server-default UTC timestamp, so you
+    don't need to pass timestamps explicitly on insert.
+- **`metadata`** — The `Base.metadata` object tracks all tables
+    belonging to this database. You'll pass it to `BaseSQLDB` in the
+    next step.
+
+!!! note "The `type_annotation_map` pattern"
+
+    The `type_annotation_map` on `Base` tells SQLAlchemy how to translate
+    Python type annotations into SQL column types. When you write
+    `name: Mapped[str255]`, SQLAlchemy looks up `str255` in this map and
+    uses `String(255)`. This keeps column type information in one place
+    rather than repeating `type_=String(255)` on every column.
+
+!!! question "Why `StrEnum` instead of a SQLAlchemy `Enum` column?"
+
+    We store status as a plain string rather than using a SQL `ENUM` type.
+    This makes the schema portable across database backends (SQLite doesn't
+    support `ENUM`) and avoids costly `ALTER TABLE` commands when adding new
+    statuses. The `StrEnum` on the Python side still gives you
+    autocompletion and validation.
 
 ## DB class
 
-Create `extensions/gubbins/gubbins-db/src/gubbins/db/sql/my_pilot_db/db.py`:
+The DB class wraps SQLAlchemy queries behind a clean async interface:
 
 <!-- blacken-docs:off -->
 
-```python
+```python title="gubbins-db/src/gubbins/db/sql/my_pilot_db/db.py"
 --8<-- "extensions/gubbins/gubbins-db/src/gubbins/db/sql/my_pilot_db/db.py"
 ```
 
 <!-- blacken-docs:on -->
 
-Key points:
+`BaseSQLDB` gives you several things out of the box:
 
-- Inherits from `BaseSQLDB`, which provides `self.conn`, transaction management, and the `metadata` class variable
-- `get_available_ces()` uses a subquery to count active pilots per CE and filters by remaining capacity
-- `submit_pilot()` creates a SUBMITTED record — the server-default handles timestamps
-- `update_pilot_status()` explicitly sets `updated_at` on transitions
+- **`self.conn`** — An async database connection, scoped to the current
+    transaction
+- **Transaction lifecycle** — Transactions are opened when you enter
+    `async with db:` and committed (or rolled back) on exit
+- **`metadata`** — Links the DB class to its schema so DiracX can
+    auto-create tables
+
+!!! tip "The subquery + coalesce pattern in `get_available_ces()`"
+
+    The `get_available_ces()` method is the most interesting query here. It
+    uses a subquery to count active pilots per CE, then outer-joins this to
+    the CE table. The `func.coalesce(active_counts.c.active, 0)` handles
+    CEs with no active pilots (where the outer join produces `NULL`). This
+    is a common SQLAlchemy pattern for "count related rows and filter by the
+    result".
+
+For a deeper understanding of how transactions work, see the
+[DB transaction model](../../reference/db-transaction-model.md)
+reference. The [Databases explanation](../../explanations/components/db.md)
+covers the broader architecture.
 
 ## Create the `__init__.py`
 
-Create an empty `extensions/gubbins/gubbins-db/src/gubbins/db/sql/my_pilot_db/__init__.py` file.
+Create an empty `my_pilot_db/__init__.py` file in the same directory.
 
-## Register the entry point
+## Register the entry point, export, and dependency
 
-Add the following to `extensions/gubbins/gubbins-db/pyproject.toml` under `[project.entry-points."diracx.dbs.sql"]`:
+The next three steps connect your database to the rest of DiracX. Each
+step serves a different purpose in the registration pipeline.
 
-```toml
+!!! note "Why three registration steps?"
+
+    1. **Entry point** (in `pyproject.toml`) — Tells DiracX's plugin
+        system that this DB exists. The entry point name becomes the DB's
+        identifier in configuration and connection URLs.
+    2. **Package export** (in `__init__.py`) — Makes the DB class
+        importable from the top-level package so other code (routers,
+        tasks) can reference it.
+    3. **Dependency injection** (in `depends.py`) — Creates an
+        `Annotated` type that FastAPI and the task worker can resolve
+        automatically, wrapping the DB in a transaction context.
+
+    See [Entrypoints](../../reference/entrypoints.md) and
+    [Dependency injection](../../reference/dependency-injection.md)
+    for the full picture.
+
+### Entry point
+
+Add under `[project.entry-points."diracx.dbs.sql"]`:
+
+```toml title="gubbins-db/pyproject.toml"
 --8<-- "extensions/gubbins/gubbins-db/pyproject.toml:my_pilots_db_entry_point"
 ```
 
-## Export from the package
-
-Add the following to `extensions/gubbins/gubbins-db/src/gubbins/db/sql/__init__.py`:
+### Package export
 
 <!-- blacken-docs:off -->
 
-```python
+```python title="gubbins-db/src/gubbins/db/sql/__init__.py"
 --8<-- "extensions/gubbins/gubbins-db/src/gubbins/db/sql/__init__.py:my_pilots_db_init"
 ```
 
 <!-- blacken-docs:on -->
 
-## Add dependency injection
-
-Add the following to `extensions/gubbins/gubbins-tasks/src/gubbins/tasks/depends.py`:
+### Dependency injection
 
 <!-- blacken-docs:off -->
 
-```python
+```python title="gubbins-tasks/src/gubbins/tasks/depends.py"
 --8<-- "extensions/gubbins/gubbins-tasks/src/gubbins/tasks/depends.py:my_pilots_depends"
 ```
 
 <!-- blacken-docs:on -->
 
-This creates an `Annotated` type that FastAPI and the task worker can
-resolve automatically — the `DBDepends` wrapper ensures the
-transaction commits before the HTTP response is sent.
+The `DBDepends` wrapper ensures the transaction commits before the HTTP
+response is sent. When used in task code, the same type annotation lets
+the task worker inject a database connection automatically.
+
+## Checkpoint
+
+At this point, verify the database layer works before moving on:
+
+```bash
+pixi run pytest-gubbins-db -- -k my_pilot
+```

@@ -43,7 +43,7 @@ def test_my_pilot_task_properties():
     assert MyPilotTask.priority == Priority.NORMAL
     assert MyPilotTask.size == Size.SMALL
     assert isinstance(MyPilotTask.retry_policy, NoRetry)
-    assert MyPilotTask.dlq_eligible is True
+    assert MyPilotTask.dlq_eligible is False
 
 
 def test_my_pilot_task_locks():

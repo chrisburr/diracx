@@ -8,6 +8,7 @@ Demonstrates:
 - Custom ``LockedObjectType`` (``MY_PILOT``) for domain-specific locking
 """
 
+# --8<-- [start:my_pilot_task_imports]
 from __future__ import annotations
 
 import dataclasses
@@ -32,8 +33,10 @@ from .depends import MyPilotDB
 from .my_pilot_lock_types import MY_PILOT
 
 logger = logging.getLogger(__name__)
+# --8<-- [end:my_pilot_task_imports]
 
 
+# --8<-- [start:my_pilot_task]
 @dataclasses.dataclass
 class MyPilotTask(BaseTask):
     """Submit a single pilot to a compute element.
@@ -49,7 +52,7 @@ class MyPilotTask(BaseTask):
     priority = Priority.NORMAL
     size = Size.SMALL
     retry_policy = NoRetry()
-    dlq_eligible = True
+    dlq_eligible = False
 
     @property
     def execution_locks(self) -> list[BaseLock]:
@@ -69,6 +72,10 @@ class MyPilotTask(BaseTask):
         return pilot_id
 
 
+# --8<-- [end:my_pilot_task]
+
+
+# --8<-- [start:my_pilot_report_task]
 class MyPilotReportTask(PeriodicBaseTask):
     """Log global pilot statistics across all VOs.
 
@@ -86,6 +93,10 @@ class MyPilotReportTask(PeriodicBaseTask):
         return summary
 
 
+# --8<-- [end:my_pilot_report_task]
+
+
+# --8<-- [start:my_check_pilots_task]
 @dataclasses.dataclass
 class MyCheckPilotsTask(PeriodicVoAwareBaseTask):
     """Periodically check and transition pilot states.
@@ -121,6 +132,10 @@ class MyCheckPilotsTask(PeriodicVoAwareBaseTask):
             logger.info("Pilot %d -> %s", pilot["pilot_id"], new_status)
 
 
+# --8<-- [end:my_check_pilots_task]
+
+
+# --8<-- [start:my_submit_pilots_task]
 @dataclasses.dataclass
 class MySubmitPilotsTask(PeriodicVoAwareBaseTask):
     """Periodically submit pilots to available compute elements.
@@ -146,3 +161,6 @@ class MySubmitPilotsTask(PeriodicVoAwareBaseTask):
                 logger.info("Spawned MyPilotTask for %s", ce["name"])
         logger.info("VO %s: spawned %d pilot tasks", self.vo, spawned)
         return spawned
+
+
+# --8<-- [end:my_submit_pilots_task]

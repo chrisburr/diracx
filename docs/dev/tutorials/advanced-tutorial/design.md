@@ -1,6 +1,10 @@
 # Part 1: Design
 
-Before writing code, think about the domain and make design decisions.
+Before writing any code, it's worth spending time thinking through the domain model and key design decisions. This upfront investment saves rework later — the data model and task graph you sketch here will guide the database schema, task classes, and API endpoints you build in the following parts.
+
+!!! tip "For real contributions"
+
+    If you were adding a new system to DiracX (rather than following a tutorial), you'd typically start by opening an issue to discuss the design with maintainers, or writing an ADR for more significant changes. See [Designing functionality](../../explanations/designing-functionality.md) for guidance.
 
 ## Identify entities
 
@@ -34,6 +38,10 @@ We need four tasks:
 | `MyCheckPilotsTask`  | PeriodicVoAwareBaseTask | Every 30s     | Transitions pilot states                           |
 | `MyPilotReportTask`  | PeriodicBaseTask        | Hourly (cron) | Logs aggregate statistics                          |
 
+!!! note "What does 'VO-aware' mean?"
+
+    A **Virtual Organisation (VO)** is a group of users and resources organised around a common goal. VO-aware tasks run once per VO — so if you have three VOs configured, `MySubmitPilotsTask` spawns three independent instances, each submitting pilots for its own VO. Non-VO-aware tasks like `MyPilotReportTask` run once globally.
+
 ```mermaid
 graph TD
     A[MySubmitPilotsTask<br/>periodic, VO-aware] -->|spawns| B[MyPilotTask<br/>one-shot]
@@ -56,8 +64,12 @@ graph TD
 next cycle and resubmit. Explicit retries would add complexity without
 benefit here.
 
-Failed tasks are dead-letter-queue eligible (`dlq_eligible = True`),
-so we can inspect failures after the fact.
+Failed tasks are *not* dead-letter-queue eligible (`dlq_eligible = False`).
+Pilots are ephemeral — there will always be more on the next cycle, so
+there's no value in preserving failed submissions for manual recovery.
+The DLQ is reserved for tasks that correspond to external state which
+must always be recovered (e.g. failing to optimise a job, or submitting
+a transformation task).
 
 ## What's next
 
