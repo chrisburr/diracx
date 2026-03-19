@@ -383,7 +383,7 @@ Periodic tasks default to a `MutexLock` on their class name (or class name + VO 
 
 ### Why three sizes / three priorities?
 
-The three size classes (`SMALL`, `MEDIUM`, `LARGE`) exist to allow independent worker scaling with different resource allocations — a worker consuming small tasks can run on a pod with minimal memory, while large tasks may need significantly more. The three priority levels (`BACKGROUND`, `NORMAL`, `REALTIME`) ensure that latency-sensitive work (e.g. job optimisation triggered by a user submission) is not blocked behind bulk background work (e.g. accounting aggregation). Using separate streams rather than a single stream with metadata-based routing means workers only consume from streams matching their size class, and within that class always drain higher-priority streams first. This is a natural fit for Redis Streams' `XREADGROUP` which accepts multiple stream keys with independent cursors.
+The three size classes (`SMALL`, `MEDIUM`, `LARGE`) exist to allow independent worker scaling with different resource allocations — a worker consuming small tasks can run on a pod with minimal memory, while large tasks may need significantly more. The three priority levels (`BACKGROUND`, `NORMAL`, `REALTIME`) ensure that latency-sensitive work (e.g. job optimisation triggered by a user submission) is not blocked behind bulk background work (e.g. accounting aggregation). Using separate streams rather than a single stream with metadata-based routing means workers only consume from streams matching their size class, and within that class always drain higher-priority streams first.
 
 ### Dependency Injection
 
@@ -391,12 +391,12 @@ The three size classes (`SMALL`, `MEDIUM`, `LARGE`) exist to allow independent w
 
 - We don't want `diracx-logic`/`diracx-db` to depend on `fastapi`
 - `diracx-tasks` shouldn't depend on `diracx-routers`
-- Pragmatically, `diracx-tasks` will always be installed alongside `diracx-routers` so we can reuse the same dependency injection system without introducing a new one just for tasks.
+- Pragmatically, `diracx-tasks` will always be installed alongside `diracx-routers` as it needs to be able to submit tasks. This means we can reuse the same dependency injection system without introducing a new one just for tasks.
 - Importing from within the same subpackage hides this implementation detail and allows us to change the implementation in the future without breaking compatibility.
 
 ## Rejected Ideas
 
-### Why not a third party library (e.g. Celery, taskiq, dramatiq, ...)?
+### Why not a third party library (e.g. Celery, arq, taskiq, dramatiq, ...)?
 
 We evaluated several async Python task queue libraries (Celery, Taskiq, arq, dramatiq). While mature and capable, adapting any of them to DiracX's requirements would require extensive customisation that negates the benefit of using an off-the-shelf solution:
 
@@ -408,14 +408,14 @@ We evaluated several async Python task queue libraries (Celery, Taskiq, arq, dra
 - **Ephemeral broker**: Our durability model discards pending tasks on restart, recreating them from authoritative database state. Task queues treat in-flight tasks as durable, which conflicts with this design and would require working around their persistence guarantees.
 - **Priority × size streams**: Nine distinct streams (3 priorities × 3 sizes) for independent worker scaling would require either nine broker instances or heavily customised queue routing.
 
-By building directly on Redis Streams primitives (consumer groups, pending entry lists, sorted sets for scheduling), we avoid the overhead of mapping our requirements onto a general-purpose library's model. The trade-off is that we're Redis-only (acceptable since DiracX already requires Redis) and must build our own monitoring, but we avoid maintaining a complex adaptation layer where debugging becomes "is this a library issue or our wrapper?".
+By building directly on Redis Streams primitives (consumer groups, pending entry lists, sorted sets for scheduling), we avoid the overhead of mapping our requirements onto a general-purpose library's model. The trade-off is that we're Redis-only and must build our own monitoring, but we avoid maintaining a complex adaptation layer where debugging becomes "is this a library issue or our wrapper?".
 
 ### Why not persist broker state?
 
 Operating Redis with strong durability guarantees (AOF fsync every write, replication, sentinel failover) adds significant operational complexity. By treating the broker as ephemeral, Redis can be run with without persistence settings since losing its contents is a normal operational event, not a disaster. On restart, startup entry points reset in-flight states in the database (e.g. PENDING → RECEIVED) and the scheduler repopulates the broker from authoritative database state. This also eliminates an entire class of consistency bugs: there is no second source of truth that can diverge from the database (e.g. a task enqueued for a job that has since been cancelled). The trade-off is that the state machine of DiracX objects must be designed to tolerate this reset, but this is a simpler constraint to enforce than guaranteeing broker/database consistency across restarts.
 
-### Make tasks classes aware of resource requirements so status can be enforced by diracx-tasks?
+### Make tasks classes aware of resource status (RSS) requirements so status can be enforced by diracx-tasks?
 
-We considered making task classes declare their resource dependencies (e.g. which storage elements or compute elements a task requires) so that diracx-tasks could check resource status before execution and skip tasks targeting banned or degraded resources. This was rejected because tasks often depend on combinations of resource types, a file transfer task may require both a source and destination storage element to be active. Encoding these relationships generically in the task framework would add significant complexity to `BaseTask` for what is ultimately domain logic that varies per task type.
+We considered making task classes declare their resource status (RSS) dependencies (e.g. which storage elements or compute elements a task requires) so that diracx-tasks could check resource status (RSS) status before execution and skip tasks targeting banned or degraded resources. This was rejected because tasks often depend on combinations of resource status (RSS) types, a file transfer task may require both a source and destination storage element to be active. Encoding these relationships generically in the task framework would add significant complexity to `BaseTask` for what is ultimately domain logic that varies per task type.
 
 Instead, tasks that interact with resources should check status within their execute() method and raise a retryable exception if a required resource is unavailable. This keeps resource awareness in the domain logic where the specific combination of resources is known. The `RetryPolicyBase.schedule_retry(attempt, exception)` interface already receives the exception, so a retry policy can distinguish between a `ResourceUnavailableError` (retry soon, the resource may recover) and an unrecoverable failure.
