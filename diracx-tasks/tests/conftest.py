@@ -18,7 +18,7 @@ from diracx.tasks.plumbing.broker.redis_streams import (
 )
 from diracx.tasks.plumbing.enums import Priority, Size
 from diracx.tasks.plumbing.factory import wrap_task
-from diracx.tasks.plumbing.lock_registry import TASK, LockedObjectType
+from diracx.tasks.plumbing.lock_registry import TASK
 from diracx.tasks.plumbing.locks import BaseLock, MutexLock
 from diracx.tasks.plumbing.retry_policies import ExponentialBackoff, NoRetry
 
@@ -76,7 +76,7 @@ class LockedTask(BaseTask):
 
     @property
     def execution_locks(self) -> list[BaseLock]:
-        return [MutexLock(LockedObjectType(TASK), "LockedTask")]
+        return [MutexLock(TASK, "LockedTask")]
 
     async def execute(self, **kwargs: Any) -> str:
         return "locked_ok"

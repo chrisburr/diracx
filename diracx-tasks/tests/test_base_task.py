@@ -9,7 +9,7 @@ import pytest
 
 from diracx.tasks.plumbing.base_task import BaseTask, PeriodicBaseTask
 from diracx.tasks.plumbing.enums import Priority, Size
-from diracx.tasks.plumbing.lock_registry import TASK, LockedObjectType
+from diracx.tasks.plumbing.lock_registry import TASK
 from diracx.tasks.plumbing.locks import BaseLock, MutexLock
 from diracx.tasks.plumbing.schedules import IntervalSeconds
 
@@ -20,7 +20,7 @@ class SimpleTask(BaseTask):
 
     @property
     def execution_locks(self) -> list[BaseLock]:
-        return [MutexLock(LockedObjectType(TASK), "SimpleTask")]
+        return [MutexLock(TASK, "SimpleTask")]
 
     async def execute(self, **kwargs: Any) -> str:
         return "done"
@@ -37,9 +37,7 @@ class DataclassTask(BaseTask):
 
     @property
     def execution_locks(self) -> list[BaseLock]:
-        return [
-            MutexLock(LockedObjectType(TASK), "DataclassTask", self.transformation_id)
-        ]
+        return [MutexLock(TASK, "DataclassTask", self.transformation_id)]
 
     async def execute(self, **kwargs: Any) -> int:
         return self.transformation_id

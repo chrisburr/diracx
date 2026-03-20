@@ -38,9 +38,12 @@ def test_size_enum():
 
 
 def test_locked_object_type_builtin():
-    assert LockedObjectType(TASK) == "task"
-    assert LockedObjectType(JOB) == "job"
-    assert LockedObjectType(TRANSFORMATION) == "transformation"
+    assert TASK == "task"
+    assert JOB == "job"
+    assert TRANSFORMATION == "transformation"
+    assert isinstance(TASK, LockedObjectType)
+    assert isinstance(JOB, LockedObjectType)
+    assert isinstance(TRANSFORMATION, LockedObjectType)
 
 
 def test_locked_object_type_unknown():
@@ -54,32 +57,32 @@ def test_locked_object_type_custom():
 
 
 def test_mutex_lock_redis_key():
-    lock = MutexLock(LockedObjectType(TASK), "MyTask")
+    lock = MutexLock(TASK, "MyTask")
     assert lock.redis_key == "lock:mutex:task:MyTask"
 
 
 def test_mutex_lock_redis_key_extra():
-    lock = MutexLock(LockedObjectType(TRANSFORMATION), 123, "extra")
+    lock = MutexLock(TRANSFORMATION, 123, "extra")
     assert lock.redis_key == "lock:mutex:transformation:123:extra"
 
 
 def test_shared_rw_lock_key():
-    lock = SharedRWLock(LockedObjectType(TRANSFORMATION), 42)
+    lock = SharedRWLock(TRANSFORMATION, 42)
     assert lock.redis_key == "lock:rw:transformation:42"
 
 
 def test_exclusive_rw_lock_key():
-    lock = ExclusiveRWLock(LockedObjectType(TRANSFORMATION), 42)
+    lock = ExclusiveRWLock(TRANSFORMATION, 42)
     assert lock.redis_key == "lock:rw:transformation:42"
 
 
 def test_rate_limiter_key():
-    limiter = RateLimiter(LockedObjectType(TASK), "MyTask")
+    limiter = RateLimiter(TASK, "MyTask")
     assert limiter.redis_key == "limiter:rate:task:MyTask"
 
 
 def test_concurrency_limiter_key():
-    limiter = ConcurrencyLimiter(LockedObjectType(TASK), "MyTask")
+    limiter = ConcurrencyLimiter(TASK, "MyTask")
     assert limiter.redis_key == "limiter:conc:task:MyTask"
 
 

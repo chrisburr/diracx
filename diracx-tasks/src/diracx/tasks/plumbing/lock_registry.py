@@ -2,11 +2,18 @@ from __future__ import annotations
 
 __all__ = ["LockedObjectType", "register_locked_object_type", "validate_registry"]
 
+import inspect
+
 # String-based extensible registry for locked object types.
 # Core types are registered here; extensions add their own via the
 # ``diracx.lock_object_types`` entry-point group.
 
-_REGISTRY: set[str] = set()
+# If an extension registers a type with the same name as a core type, that's a
+# potential bug due to a new object type being added to diracx which conflicts
+# with an extension's custom type. To help catch this, we track the file where
+# each type was registered and throw an error if a duplicate registration is
+# attempted.
+_REGISTRY: dict[str, str] = {}
 
 
 class LockedObjectType(str):
@@ -25,10 +32,14 @@ class LockedObjectType(str):
         return super().__new__(cls, value)
 
 
-def register_locked_object_type(name: str) -> str:
-    """Register a new locked-object type and return the name."""
-    _REGISTRY.add(name)
-    return name
+def register_locked_object_type(name: str) -> LockedObjectType:
+    """Register a new locked-object type and return it as a ``LockedObjectType``."""
+    if name in _REGISTRY:
+        raise ValueError(
+            f"LockedObjectType {name!r} is already registered at {_REGISTRY[name]!r}"
+        )
+    _REGISTRY[name] = inspect.stack()[1].filename
+    return LockedObjectType(name)
 
 
 def validate_registry() -> None:

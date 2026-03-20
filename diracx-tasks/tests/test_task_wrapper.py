@@ -11,7 +11,7 @@ from diracx.tasks.plumbing.base_task import BaseTask
 from diracx.tasks.plumbing.enums import Priority, Size
 from diracx.tasks.plumbing.exceptions import UnableToAcquireLockError
 from diracx.tasks.plumbing.factory import task_wrapper
-from diracx.tasks.plumbing.lock_registry import TASK, LockedObjectType
+from diracx.tasks.plumbing.lock_registry import TASK
 from diracx.tasks.plumbing.locks import BaseLock, MutexLock, RateLimiter
 
 from .conftest import LockedTask
@@ -55,11 +55,11 @@ async def test_task_wrapper_interactive_skips_limiters():
 
         @property
         def execution_locks(self) -> list[BaseLock]:
-            limiter = RateLimiter(LockedObjectType(TASK), "TaskWithLimiter")
+            limiter = RateLimiter(TASK, "TaskWithLimiter")
             limiter.limit = 1
             limiter.window_seconds = 60
             return [
-                MutexLock(LockedObjectType(TASK), "TaskWithLimiter"),
+                MutexLock(TASK, "TaskWithLimiter"),
                 limiter,
             ]
 
@@ -87,7 +87,7 @@ async def test_task_wrapper_non_interactive_acquires_limiters():
 
         @property
         def execution_locks(self) -> list[BaseLock]:
-            limiter = RateLimiter(LockedObjectType(TASK), "TaskWithLimiter2")
+            limiter = RateLimiter(TASK, "TaskWithLimiter2")
             limiter.limit = 10
             limiter.window_seconds = 60
             return [limiter]
@@ -115,7 +115,7 @@ async def test_task_wrapper_releases_on_exception():
 
         @property
         def execution_locks(self) -> list[BaseLock]:
-            return [MutexLock(LockedObjectType(TASK), "FailingLocked")]
+            return [MutexLock(TASK, "FailingLocked")]
 
         async def execute(self, **kwargs: Any) -> str:
             raise ValueError("task failed")

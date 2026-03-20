@@ -8,7 +8,7 @@ from typing import Any
 from diracx.tasks.plumbing.base_task import BaseTask
 from diracx.tasks.plumbing.enums import Priority, Size
 from diracx.tasks.plumbing.factory import wrap_task
-from diracx.tasks.plumbing.lock_registry import TASK, LockedObjectType
+from diracx.tasks.plumbing.lock_registry import TASK
 from diracx.tasks.plumbing.locks import BaseLock, MutexLock
 
 
@@ -20,7 +20,7 @@ class SampleTask(BaseTask):
 
     @property
     def execution_locks(self) -> list[BaseLock]:
-        return [MutexLock(LockedObjectType(TASK), "SampleTask")]
+        return [MutexLock(TASK, "SampleTask")]
 
     async def execute(self, **kwargs: Any) -> int:
         return self.value * 2
