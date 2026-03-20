@@ -136,7 +136,10 @@ nav:
               - Database: dev/tutorials/advanced-tutorial/database.md
               - Tasks: dev/tutorials/advanced-tutorial/tasks.md
               - Router: dev/tutorials/advanced-tutorial/router.md
-              - Testing: dev/tutorials/advanced-tutorial/testing.md
+              - Testing:
+                  - Database: dev/tutorials/advanced-tutorial/testing-database.md
+                  - Tasks: dev/tutorials/advanced-tutorial/testing-tasks.md
+                  - Router: dev/tutorials/advanced-tutorial/testing-router.md
               - Running locally: dev/tutorials/advanced-tutorial/running-locally.md
           - Run a full DiracX instance locally: dev/tutorials/run-locally.md
       - Frontend:

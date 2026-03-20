@@ -1,4 +1,4 @@
-# Part 6: Running locally
+# Part 8: Running locally
 
 ## Starting the full stack
 
@@ -53,8 +53,6 @@ With the full stack running, tasks can be submitted via the helper command:
 ```bash
 pixi run local-tasks submit <entry_point> [--args JSON]
 ```
-
-Or through the Swagger UI at <http://localhost:8000/api/docs>.
 
 The scheduler handles periodic task scheduling, and workers pick up
 tasks from the Redis streams based on their size and priority.
