@@ -2,7 +2,7 @@ from __future__ import annotations
 
 __all__ = ["solve_task_dependencies"]
 
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, Callable
 
 from fastapi.concurrency import contextmanager_in_threadpool
@@ -84,7 +84,8 @@ async def _resolve_dependant(
             )
 
             if use_sub_dependant.is_async_gen_callable:
-                solved = await async_exit_stack.enter_async_context(call(**sub_values))
+                cm = asynccontextmanager(call)(**sub_values)
+                solved = await async_exit_stack.enter_async_context(cm)
             elif use_sub_dependant.is_gen_callable:
                 solved = await async_exit_stack.enter_async_context(
                     contextmanager_in_threadpool(call(**sub_values))

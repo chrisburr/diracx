@@ -377,11 +377,12 @@ class Worker:
         max_retries = getattr(task_cls.retry_policy, "max_retries", 0)
 
         try:
-            dlq_id = await self.task_db.insert_dlq_task(
-                task_class=task_message.task_name,
-                task_args=task_args,
-                max_retries=max_retries,
-            )
+            async with self.task_db:
+                dlq_id = await self.task_db.insert_dlq_task(
+                    task_class=task_message.task_name,
+                    task_args=task_args,
+                    max_retries=max_retries,
+                )
             logger.info(
                 "Task %s (ID: %s) persisted to dead letter queue (dlq_id=%d). Error: %s",
                 task_message.task_name,
