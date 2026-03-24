@@ -7,7 +7,7 @@ tmp_dir=$(mktemp -d)
 echo "Using temp dir: ${tmp_dir}"
 mkdir -p "${tmp_dir}/keystore" "${tmp_dir}/cs_store/" "${tmp_dir}/seaweedfs" "${tmp_dir}/logs"
 
-state_key="$(head -c 32 /dev/urandom | base64)"
+state_key="$(head -c 32 /dev/urandom | base64 -w0)"
 
 function log_prefix() {
   local prefix=$1
@@ -111,9 +111,10 @@ if [ "\$CONDA_PREFIX" != "$CONDA_PREFIX" ]; then
   return 1 2>/dev/null || exit 1
 fi
 ENVEOF
-env | grep '^DIRACX_' | while IFS='=' read -r name value; do
-  printf 'export %s=%q\n' "$name" "$value" >> "$env_file"
-done
+while IFS= read -r name; do
+  printf 'export %s=%q\n' "$name" "${!name}" >> "$env_file"
+done < <(compgen -A variable | grep '^DIRACX_')
+
 echo "export DIRACX_URL=http://${hostname_lower}:8000" >> "$env_file"
 
 # Write pointer so local-shell and local-tasks can find env.sh
